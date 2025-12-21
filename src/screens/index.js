@@ -7,3 +7,4 @@ export { MomentsScreen } from './MomentsScreen';
 export { PulseScreen } from './PulseScreen';
 export { PlanScreen } from './PlanScreen';
 export { PremiumScreen } from './PremiumScreen';
+export { SettingsScreen } from './SettingsScreen';

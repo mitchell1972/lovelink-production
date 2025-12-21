@@ -17,6 +17,7 @@ import {
   PulseScreen,
   PlanScreen,
   PremiumScreen,
+  SettingsScreen,
 } from './src/screens';
 import { isSupabaseConfigured } from './src/config/supabase';
 
@@ -36,20 +37,11 @@ const AppContent = () => {
     return (
       <GradientBackground>
         <Header />
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-        >
-          <View style={styles.configCard}>
-            <Text style={styles.configTitle}>⚙️ Setup Required</Text>
-            <Text style={styles.configText}>
-              Please configure your Supabase credentials in:{'\n\n'}
-              src/config/supabase.js
-              {'\n\n'}
-              1. Create a project at supabase.com{'\n'}
-              2. Run the SQL schema (supabase-schema.sql){'\n'}
-              3. Copy your project URL and anon key{'\n'}
-              4. Paste them in the config file
+        <ScrollView contentContainerStyle={styles.scrollContent}>
+          <View style={styles.errorCard}>
+            <Text style={styles.errorTitle}>⚠️ Configuration Required</Text>
+            <Text style={styles.errorText}>
+              Please configure your Supabase credentials in src/config/supabase.js
             </Text>
           </View>
         </ScrollView>
@@ -57,38 +49,30 @@ const AppContent = () => {
     );
   }
 
-  // Not authenticated - show login/signup
+  // Not logged in - show auth screens
   if (!isAuthenticated) {
     return (
       <GradientBackground>
         <StatusBar barStyle="light-content" />
         <Header />
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
-        >
+        <ScrollView contentContainerStyle={styles.scrollContent}>
           {authScreen === 'signup' ? (
-            <SignUpScreen onSwitchToLogin={() => setAuthScreen('login')} />
+            <SignUpScreen onSwitchToLogin={() => setAuthScreen('login')} onNavigate={setAuthScreen} />
           ) : (
-            <LoginScreen onSwitchToSignUp={() => setAuthScreen('signup')} />
+            <LoginScreen onNavigate={setAuthScreen} />
           )}
         </ScrollView>
       </GradientBackground>
     );
   }
 
-  // Authenticated but not paired - show link partner screen
+  // Logged in but not paired - show partner linking
   if (!isPaired) {
     return (
       <GradientBackground>
         <StatusBar barStyle="light-content" />
         <Header />
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
-        >
+        <ScrollView contentContainerStyle={styles.scrollContent}>
           <LinkPartnerScreen />
         </ScrollView>
       </GradientBackground>
@@ -98,6 +82,8 @@ const AppContent = () => {
   // Fully authenticated and paired - show main app
   const renderScreen = () => {
     switch (currentScreen) {
+      case 'home':
+        return <HomeScreen onNavigate={setCurrentScreen} />;
       case 'session':
         return <SessionScreen onNavigate={setCurrentScreen} />;
       case 'moments':
@@ -108,6 +94,8 @@ const AppContent = () => {
         return <PlanScreen onNavigate={setCurrentScreen} />;
       case 'premium':
         return <PremiumScreen onNavigate={setCurrentScreen} />;
+      case 'settings':
+        return <SettingsScreen onNavigate={setCurrentScreen} />;
       default:
         return <HomeScreen onNavigate={setCurrentScreen} />;
     }
@@ -117,50 +105,43 @@ const AppContent = () => {
     <GradientBackground>
       <StatusBar barStyle="light-content" />
       <Header />
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag"
-      >
+      <ScrollView contentContainerStyle={styles.scrollContent}>
         {renderScreen()}
       </ScrollView>
     </GradientBackground>
   );
 };
 
-// Root App with providers
-const App = () => {
+// Root component with providers
+export default function App() {
   return (
     <AuthProvider>
       <AppContent />
     </AuthProvider>
   );
-};
+}
 
 const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     justifyContent: 'center',
-    alignItems: 'center',
     paddingVertical: 20,
   },
-  configCard: {
-    backgroundColor: colors.card,
-    borderRadius: 20,
-    width: '90%',
+  errorCard: {
+    backgroundColor: 'white',
+    margin: 20,
     padding: 20,
+    borderRadius: 15,
   },
-  configTitle: {
-    fontSize: 22,
-    fontWeight: '600',
-    marginBottom: 15,
-    textAlign: 'center',
+  errorTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 10,
   },
-  configText: {
+  errorText: {
     fontSize: 14,
-    lineHeight: 22,
-    color: colors.textLight,
+    color: '#666',
+    lineHeight: 20,
   },
 });
-
-export default App;

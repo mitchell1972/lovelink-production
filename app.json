@@ -6,25 +6,61 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": false,
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#6C63FF"
     },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.lovelink.app"
+      "supportsTablet": false,
+      "bundleIdentifier": "com.lovelink.app",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSCameraUsageDescription": "LoveLink needs camera access to share moments with your partner.",
+        "NSPhotoLibraryUsageDescription": "LoveLink needs photo library access to share moments with your partner.",
+        "NSPhotoLibraryAddUsageDescription": "LoveLink needs permission to save photos to your library."
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#6C63FF"
       },
-      "package": "com.lovelink.app"
+      "package": "com.lovelink.app",
+      "versionCode": 1,
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "VIBRATE"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#6C63FF"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow LoveLink to access your photos to share moments with your partner.",
+          "cameraPermission": "Allow LoveLink to access your camera to capture moments with your partner."
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "your-eas-project-id"
+      }
     }
   }
 }
