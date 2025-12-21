@@ -1,132 +1,179 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, Image, ScrollView, StyleSheet, Alert, TouchableOpacity } from 'react-native';
-import * as ImagePicker from 'expo-image-picker';
-import { useAuth } from '../contexts/AuthContext';
-import { momentsService } from '../services/momentsService';
-import { Card, Heading, Subheading, Button, colors } from '../components/ui';
+// src/screens/MomentsScreen.js
+// Photo gallery with premium feature gating
 
-export const MomentsScreen = ({ onNavigate }) => {
-  const { user, partnership } = useAuth();
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Image,
+  FlatList,
+  Alert,
+  ActivityIndicator,
+  Modal,
+  Dimensions,
+  RefreshControl,
+} from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useAuth } from '../contexts/AuthContext';
+import { getMoments, uploadMoment, deleteMoment } from '../services/momentsService';
+import { checkMomentsLimit, getPremiumStatus } from '../services/premiumService';
+
+const { width } = Dimensions.get('window');
+const imageSize = (width - 48) / 3;
+
+export default function MomentsScreen({ onBack, onNavigate }) {
+  const { user, profile } = useAuth();
   const [moments, setMoments] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [selectedMoment, setSelectedMoment] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [limitInfo, setLimitInfo] = useState(null);
+  const [isPremium, setIsPremium] = useState(false);
 
   useEffect(() => {
-    console.log('[MOMENTS] Screen mounted');
     loadMoments();
-    
-    const subscription = momentsService.subscribeToMoments(
-      partnership.id,
-      (payload) => {
-        console.log('[MOMENTS] Real-time update:', payload.eventType);
-        loadMoments();
-      }
-    );
-
-    return () => subscription?.unsubscribe();
+    checkPremiumAndLimits();
   }, []);
 
+  const checkPremiumAndLimits = async () => {
+    if (!user) return;
+    const status = await getPremiumStatus(user.id);
+    setIsPremium(status.isPremium);
+    const limits = await checkMomentsLimit(user.id);
+    setLimitInfo(limits);
+  };
+
   const loadMoments = async () => {
-    console.log('[MOMENTS] loadMoments called');
-    setLoading(true);
+    if (!user || !profile?.partner_id) {
+      setLoading(false);
+      return;
+    }
+    
     try {
-      const data = await momentsService.getMoments(partnership.id);
-      console.log('[MOMENTS] Loaded:', data?.length || 0, 'moments');
+      const data = await getMoments(user.id, profile.partner_id);
       setMoments(data || []);
-    } catch (err) {
-      console.log('[MOMENTS] ERROR loading:', err);
+      await checkPremiumAndLimits();
+    } catch (error) {
+      console.error('Error loading moments:', error);
     } finally {
       setLoading(false);
     }
   };
 
-  const pickImage = async () => {
-    Alert.alert(
-      'Add Moment',
-      'Choose a source',
-      [
-        { text: 'Camera', onPress: () => launchCamera() },
-        { text: 'Photo Library', onPress: () => launchLibrary() },
-        { text: 'Cancel', style: 'cancel' },
-      ]
-    );
-  };
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadMoments();
+    setRefreshing(false);
+  }, [user, profile]);
 
-  const launchCamera = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Camera access is required');
+  const handleAddMoment = async () => {
+    // Check limits first
+    const limits = await checkMomentsLimit(user.id);
+    
+    if (!limits.allowed) {
+      Alert.alert(
+        '📸 Photo Limit Reached',
+        `You've reached the ${limits.limit} photo limit on the free plan.\n\nUpgrade to Premium for unlimited photos!`,
+        [
+          { text: 'Maybe Later', style: 'cancel' },
+          { 
+            text: '💎 Go Premium', 
+            onPress: () => onNavigate('Premium')
+          },
+        ]
+      );
       return;
     }
 
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      quality: 0.7,
-    });
-
-    if (!result.canceled) {
-      uploadImage(result.assets[0].uri);
+    // Show remaining photos for free users
+    if (!limits.isPremium && limits.limit !== Infinity) {
+      const remaining = limits.limit - limits.current;
+      if (remaining <= 3 && remaining > 0) {
+        Alert.alert(
+          '📸 Almost at Limit',
+          `You have ${remaining} photo${remaining === 1 ? '' : 's'} left on the free plan.`,
+          [{ text: 'OK' }]
+        );
+      }
     }
-  };
 
-  const launchLibrary = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Photo library access is required');
+      Alert.alert('Permission needed', 'Please allow photo access to add moments.');
       return;
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
-      quality: 0.7,
+      aspect: [1, 1],
+      quality: 0.8,
     });
 
-    if (!result.canceled) {
-      uploadImage(result.assets[0].uri);
+    if (!result.canceled && result.assets[0]) {
+      setUploading(true);
+      try {
+        const caption = await promptForCaption();
+        const newMoment = await uploadMoment(
+          user.id, 
+          profile.partner_id,
+          result.assets[0].uri,
+          caption
+        );
+        if (newMoment) {
+          setMoments(prev => [newMoment, ...prev]);
+          await checkPremiumAndLimits();
+        }
+      } catch (error) {
+        console.error('Upload error:', error);
+        Alert.alert('Error', 'Failed to upload photo. Please try again.');
+      } finally {
+        setUploading(false);
+      }
     }
   };
 
-  const uploadImage = async (uri) => {
-    console.log('[MOMENTS] uploadImage called');
-    setUploading(true);
-    try {
-      await momentsService.uploadMoment(partnership.id, user.id, uri);
-      console.log('[MOMENTS] Upload successful');
-      Alert.alert('Moment shared! 📸', 'Your partner can now see this photo.');
-      loadMoments();
-    } catch (err) {
-      console.log('[MOMENTS] ERROR uploading:', err);
-      Alert.alert('Error', err.message || 'Failed to upload photo');
-    } finally {
-      setUploading(false);
-    }
+  const promptForCaption = () => {
+    return new Promise((resolve) => {
+      Alert.prompt(
+        'Add Caption',
+        'Add a caption to your moment (optional)',
+        [
+          { text: 'Skip', onPress: () => resolve(''), style: 'cancel' },
+          { text: 'Add', onPress: (text) => resolve(text || '') },
+        ],
+        'plain-text',
+        ''
+      );
+    });
   };
 
-  const handleDelete = (moment) => {
-    const isOwner = moment.user_id === user.id;
-    
+  const handleDeleteMoment = async (moment) => {
+    if (moment.user_id !== user.id) {
+      Alert.alert('Cannot Delete', "You can only delete your own photos.");
+      return;
+    }
+
     Alert.alert(
       'Delete Moment',
-      isOwner 
-        ? 'Are you sure you want to delete this photo?'
-        : 'This photo was shared by your partner. Are you sure you want to delete it?',
+      'Are you sure you want to delete this photo?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
-            console.log('[MOMENTS] Deleting moment:', moment.id);
             try {
-              await momentsService.deleteMoment(moment.id, moment.image_url);
-              console.log('[MOMENTS] Deleted successfully');
-              Alert.alert('Deleted', 'Photo has been removed.');
-              loadMoments();
-            } catch (err) {
-              console.log('[MOMENTS] ERROR deleting:', err);
-              Alert.alert('Error', 'Failed to delete photo');
+              await deleteMoment(moment.id, moment.image_url);
+              setMoments(prev => prev.filter(m => m.id !== moment.id));
+              setSelectedMoment(null);
+              await checkPremiumAndLimits();
+            } catch (error) {
+              Alert.alert('Error', 'Failed to delete photo.');
             }
           },
         },
@@ -134,54 +181,371 @@ export const MomentsScreen = ({ onNavigate }) => {
     );
   };
 
-  return (
-    <Card>
-      <Heading>Moments</Heading>
-      <Subheading>Share special moments with {partnership.partner.name}</Subheading>
-
-      <Button title="📷 Add Moment" onPress={pickImage} loading={uploading} />
-
-      <ScrollView style={styles.gallery} showsVerticalScrollIndicator={false}>
-        {loading ? (
-          <Text style={styles.loadingText}>Loading moments...</Text>
-        ) : moments.length === 0 ? (
-          <Text style={styles.emptyText}>No moments yet. Share your first photo! 📸</Text>
-        ) : (
-          <View style={styles.grid}>
-            {moments.map((moment) => (
-              <View key={moment.id} style={styles.momentContainer}>
-                <Image source={{ uri: moment.image_url }} style={styles.momentImage} />
-                <View style={styles.momentFooter}>
-                  <Text style={styles.momentAuthor}>
-                    {moment.user_id === user.id ? 'You' : partnership.partner.name}
-                  </Text>
-                  <TouchableOpacity onPress={() => handleDelete(moment)} style={styles.deleteBtn}>
-                    <Text style={styles.deleteBtnText}>🗑️</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
-          </View>
-        )}
-      </ScrollView>
-
-      <Button title="🔄 Refresh" variant="outline" onPress={loadMoments} style={styles.refreshBtn} />
-      <Button title="← Back" variant="secondary" onPress={() => onNavigate('home')} style={styles.backBtn} />
-    </Card>
+  const renderMoment = ({ item }) => (
+    <TouchableOpacity
+      style={styles.momentItem}
+      onPress={() => setSelectedMoment(item)}
+    >
+      <Image source={{ uri: item.image_url }} style={styles.momentImage} />
+      {item.user_id === user?.id && (
+        <View style={styles.myBadge}>
+          <Text style={styles.myBadgeText}>Me</Text>
+        </View>
+      )}
+    </TouchableOpacity>
   );
-};
+
+  const renderLimitBanner = () => {
+    if (!limitInfo || limitInfo.isPremium) return null;
+    
+    const used = limitInfo.current;
+    const total = limitInfo.limit;
+    const percentage = (used / total) * 100;
+    
+    return (
+      <TouchableOpacity 
+        style={styles.limitBanner}
+        onPress={() => onNavigate('Premium')}
+      >
+        <View style={styles.limitInfo}>
+          <Text style={styles.limitText}>
+            📸 {used}/{total} photos used
+          </Text>
+          <Text style={styles.limitUpgrade}>Upgrade for unlimited →</Text>
+        </View>
+        <View style={styles.limitBarContainer}>
+          <View style={[styles.limitBar, { width: `${Math.min(percentage, 100)}%` }]} />
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  if (loading) {
+    return (
+      <LinearGradient colors={['#667eea', '#764ba2']} style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#fff" />
+        </View>
+      </LinearGradient>
+    );
+  }
+
+  if (!profile?.partner_id) {
+    return (
+      <LinearGradient colors={['#667eea', '#764ba2']} style={styles.container}>
+        <View style={styles.noPartnerContainer}>
+          <Text style={styles.noPartnerIcon}>🔗</Text>
+          <Text style={styles.noPartnerText}>Connect with your partner first!</Text>
+          <TouchableOpacity style={styles.backButton} onPress={onBack}>
+            <Text style={styles.backButtonText}>← Back</Text>
+          </TouchableOpacity>
+        </View>
+      </LinearGradient>
+    );
+  }
+
+  return (
+    <LinearGradient colors={['#667eea', '#764ba2']} style={styles.container}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={onBack}>
+          <Text style={styles.headerBack}>←</Text>
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Our Moments 📸</Text>
+        <TouchableOpacity onPress={handleAddMoment} disabled={uploading}>
+          {uploading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.headerAdd}>+</Text>
+          )}
+        </TouchableOpacity>
+      </View>
+
+      {/* Premium/Limit Banner */}
+      {isPremium ? (
+        <View style={styles.premiumBadge}>
+          <Text style={styles.premiumBadgeText}>💎 Premium - Unlimited Photos</Text>
+        </View>
+      ) : (
+        renderLimitBanner()
+      )}
+
+      {moments.length === 0 ? (
+        <View style={styles.emptyContainer}>
+          <Text style={styles.emptyIcon}>📷</Text>
+          <Text style={styles.emptyText}>No moments yet</Text>
+          <Text style={styles.emptySubtext}>
+            Tap + to add your first photo together!
+          </Text>
+        </View>
+      ) : (
+        <FlatList
+          data={moments}
+          renderItem={renderMoment}
+          keyExtractor={(item) => item.id}
+          numColumns={3}
+          contentContainerStyle={styles.grid}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor="#fff"
+            />
+          }
+        />
+      )}
+
+      {/* Full Image Modal */}
+      <Modal visible={!!selectedMoment} transparent animationType="fade">
+        <View style={styles.modalContainer}>
+          <TouchableOpacity
+            style={styles.modalClose}
+            onPress={() => setSelectedMoment(null)}
+          >
+            <Text style={styles.modalCloseText}>✕</Text>
+          </TouchableOpacity>
+          
+          {selectedMoment && (
+            <View style={styles.modalContent}>
+              <Image
+                source={{ uri: selectedMoment.image_url }}
+                style={styles.modalImage}
+                resizeMode="contain"
+              />
+              {selectedMoment.caption && (
+                <Text style={styles.modalCaption}>{selectedMoment.caption}</Text>
+              )}
+              <Text style={styles.modalDate}>
+                {new Date(selectedMoment.created_at).toLocaleDateString()}
+              </Text>
+              
+              {selectedMoment.user_id === user?.id && (
+                <TouchableOpacity
+                  style={styles.deleteButton}
+                  onPress={() => handleDeleteMoment(selectedMoment)}
+                >
+                  <Text style={styles.deleteButtonText}>🗑️ Delete</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+        </View>
+      </Modal>
+    </LinearGradient>
+  );
+}
 
 const styles = StyleSheet.create({
-  gallery: { maxHeight: 350, marginTop: 15 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
-  momentContainer: { width: '48%', marginBottom: 10 },
-  momentImage: { width: '100%', height: 120, borderRadius: 10 },
-  momentFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 },
-  momentAuthor: { fontSize: 12, color: '#999' },
-  deleteBtn: { padding: 2 },
-  deleteBtnText: { fontSize: 14 },
-  loadingText: { textAlign: 'center', color: '#999', marginTop: 20 },
-  emptyText: { textAlign: 'center', color: '#999', marginTop: 20, fontStyle: 'italic' },
-  refreshBtn: { marginTop: 10 },
-  backBtn: { marginTop: 10 },
+  container: {
+    flex: 1,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: 60,
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+  },
+  headerBack: {
+    fontSize: 28,
+    color: '#fff',
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+  headerAdd: {
+    fontSize: 32,
+    color: '#fff',
+    fontWeight: '300',
+  },
+
+  // Premium/Limit Banners
+  premiumBadge: {
+    backgroundColor: 'rgba(255, 215, 0, 0.2)',
+    marginHorizontal: 16,
+    marginBottom: 12,
+    padding: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  premiumBadgeText: {
+    color: '#FFD700',
+    fontWeight: '600',
+    fontSize: 13,
+  },
+  limitBanner: {
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    marginHorizontal: 16,
+    marginBottom: 12,
+    padding: 12,
+    borderRadius: 8,
+  },
+  limitInfo: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  limitText: {
+    color: '#fff',
+    fontWeight: '500',
+    fontSize: 13,
+  },
+  limitUpgrade: {
+    color: '#FFD700',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  limitBarContainer: {
+    height: 4,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  limitBar: {
+    height: '100%',
+    backgroundColor: '#FFD700',
+    borderRadius: 2,
+  },
+
+  // Grid
+  grid: {
+    padding: 12,
+  },
+  momentItem: {
+    margin: 4,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  momentImage: {
+    width: imageSize,
+    height: imageSize,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  myBadge: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    backgroundColor: '#6C63FF',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  myBadgeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+
+  // Empty State
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 40,
+  },
+  emptyIcon: {
+    fontSize: 64,
+    marginBottom: 16,
+  },
+  emptyText: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#fff',
+    marginBottom: 8,
+  },
+  emptySubtext: {
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.7)',
+    textAlign: 'center',
+  },
+
+  // No Partner
+  noPartnerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 40,
+  },
+  noPartnerIcon: {
+    fontSize: 64,
+    marginBottom: 16,
+  },
+  noPartnerText: {
+    fontSize: 18,
+    color: '#fff',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  backButton: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  backButtonText: {
+    color: '#fff',
+    fontSize: 16,
+  },
+
+  // Modal
+  modalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.95)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalClose: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    zIndex: 10,
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalCloseText: {
+    color: '#fff',
+    fontSize: 28,
+  },
+  modalContent: {
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalImage: {
+    width: width - 40,
+    height: width - 40,
+    borderRadius: 12,
+  },
+  modalCaption: {
+    color: '#fff',
+    fontSize: 16,
+    marginTop: 16,
+    textAlign: 'center',
+  },
+  modalDate: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 13,
+    marginTop: 8,
+  },
+  deleteButton: {
+    marginTop: 20,
+    backgroundColor: 'rgba(255,59,48,0.2)',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  deleteButtonText: {
+    color: '#ff3b30',
+    fontSize: 14,
+    fontWeight: '500',
+  },
 });
