@@ -16,16 +16,15 @@ import {
   RefreshControl,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../contexts/AuthContext';
-import { getMoments, uploadMoment, deleteMoment } from '../services/momentsService';
+import { momentsService } from '../services/momentsService';
 import { checkMomentsLimit, getPremiumStatus } from '../services/premiumService';
 
 const { width } = Dimensions.get('window');
 const imageSize = (width - 48) / 3;
 
-export default function MomentsScreen({ onBack, onNavigate }) {
-  const { user, profile } = useAuth();
+export default function MomentsScreen({ onNavigate }) {
+  const { user, profile, partnership } = useAuth();
   const [moments, setMoments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -41,20 +40,24 @@ export default function MomentsScreen({ onBack, onNavigate }) {
 
   const checkPremiumAndLimits = async () => {
     if (!user) return;
-    const status = await getPremiumStatus(user.id);
-    setIsPremium(status.isPremium);
-    const limits = await checkMomentsLimit(user.id);
-    setLimitInfo(limits);
+    try {
+      const status = await getPremiumStatus(user.id);
+      setIsPremium(status.isPremium);
+      const limits = await checkMomentsLimit(user.id);
+      setLimitInfo(limits);
+    } catch (error) {
+      console.error('Error checking premium:', error);
+    }
   };
 
   const loadMoments = async () => {
-    if (!user || !profile?.partner_id) {
+    if (!user || !partnership?.id) {
       setLoading(false);
       return;
     }
     
     try {
-      const data = await getMoments(user.id, profile.partner_id);
+      const data = await momentsService.getMoments(partnership.id);
       setMoments(data || []);
       await checkPremiumAndLimits();
     } catch (error) {
@@ -68,37 +71,45 @@ export default function MomentsScreen({ onBack, onNavigate }) {
     setRefreshing(true);
     await loadMoments();
     setRefreshing(false);
-  }, [user, profile]);
+  }, [user, partnership]);
+
+  const handleBack = () => {
+    onNavigate('home');
+  };
 
   const handleAddMoment = async () => {
     // Check limits first
-    const limits = await checkMomentsLimit(user.id);
-    
-    if (!limits.allowed) {
-      Alert.alert(
-        '📸 Photo Limit Reached',
-        `You've reached the ${limits.limit} photo limit on the free plan.\n\nUpgrade to Premium for unlimited photos!`,
-        [
-          { text: 'Maybe Later', style: 'cancel' },
-          { 
-            text: '💎 Go Premium', 
-            onPress: () => onNavigate('Premium')
-          },
-        ]
-      );
-      return;
-    }
-
-    // Show remaining photos for free users
-    if (!limits.isPremium && limits.limit !== Infinity) {
-      const remaining = limits.limit - limits.current;
-      if (remaining <= 3 && remaining > 0) {
+    try {
+      const limits = await checkMomentsLimit(user.id);
+      
+      if (!limits.allowed) {
         Alert.alert(
-          '📸 Almost at Limit',
-          `You have ${remaining} photo${remaining === 1 ? '' : 's'} left on the free plan.`,
-          [{ text: 'OK' }]
+          '📸 Photo Limit Reached',
+          'You\'ve reached the ' + limits.limit + ' photo limit on the free plan.\n\nUpgrade to Premium for unlimited photos!',
+          [
+            { text: 'Maybe Later', style: 'cancel' },
+            { 
+              text: '💎 Go Premium', 
+              onPress: () => onNavigate('premium')
+            },
+          ]
         );
+        return;
       }
+
+      // Show remaining photos for free users
+      if (!limits.isPremium && limits.limit !== Infinity) {
+        const remaining = limits.limit - limits.current;
+        if (remaining <= 3 && remaining > 0) {
+          Alert.alert(
+            '📸 Almost at Limit',
+            'You have ' + remaining + ' photo' + (remaining === 1 ? '' : 's') + ' left on the free plan.',
+            [{ text: 'OK' }]
+          );
+        }
+      }
+    } catch (error) {
+      console.error('Error checking limits:', error);
     }
 
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -108,7 +119,7 @@ export default function MomentsScreen({ onBack, onNavigate }) {
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
       quality: 0.8,
@@ -118,9 +129,9 @@ export default function MomentsScreen({ onBack, onNavigate }) {
       setUploading(true);
       try {
         const caption = await promptForCaption();
-        const newMoment = await uploadMoment(
+        const newMoment = await momentsService.uploadMoment(
+          partnership.id,
           user.id, 
-          profile.partner_id,
           result.assets[0].uri,
           caption
         );
@@ -168,7 +179,7 @@ export default function MomentsScreen({ onBack, onNavigate }) {
           style: 'destructive',
           onPress: async () => {
             try {
-              await deleteMoment(moment.id, moment.image_url);
+              await momentsService.deleteMoment(moment.id, moment.image_url);
               setMoments(prev => prev.filter(m => m.id !== moment.id));
               setSelectedMoment(null);
               await checkPremiumAndLimits();
@@ -205,7 +216,7 @@ export default function MomentsScreen({ onBack, onNavigate }) {
     return (
       <TouchableOpacity 
         style={styles.limitBanner}
-        onPress={() => onNavigate('Premium')}
+        onPress={() => onNavigate('premium')}
       >
         <View style={styles.limitInfo}>
           <Text style={styles.limitText}>
@@ -214,7 +225,7 @@ export default function MomentsScreen({ onBack, onNavigate }) {
           <Text style={styles.limitUpgrade}>Upgrade for unlimited →</Text>
         </View>
         <View style={styles.limitBarContainer}>
-          <View style={[styles.limitBar, { width: `${Math.min(percentage, 100)}%` }]} />
+          <View style={[styles.limitBar, { width: Math.min(percentage, 100) + '%' }]} />
         </View>
       </TouchableOpacity>
     );
@@ -222,32 +233,28 @@ export default function MomentsScreen({ onBack, onNavigate }) {
 
   if (loading) {
     return (
-      <LinearGradient colors={['#667eea', '#764ba2']} style={styles.container}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#fff" />
-        </View>
-      </LinearGradient>
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#fff" />
+      </View>
     );
   }
 
-  if (!profile?.partner_id) {
+  if (!partnership?.id) {
     return (
-      <LinearGradient colors={['#667eea', '#764ba2']} style={styles.container}>
-        <View style={styles.noPartnerContainer}>
-          <Text style={styles.noPartnerIcon}>🔗</Text>
-          <Text style={styles.noPartnerText}>Connect with your partner first!</Text>
-          <TouchableOpacity style={styles.backButton} onPress={onBack}>
-            <Text style={styles.backButtonText}>← Back</Text>
-          </TouchableOpacity>
-        </View>
-      </LinearGradient>
+      <View style={styles.noPartnerContainer}>
+        <Text style={styles.noPartnerIcon}>🔗</Text>
+        <Text style={styles.noPartnerText}>Connect with your partner first!</Text>
+        <TouchableOpacity style={styles.backButton} onPress={handleBack}>
+          <Text style={styles.backButtonText}>← Back</Text>
+        </TouchableOpacity>
+      </View>
     );
   }
 
   return (
-    <LinearGradient colors={['#667eea', '#764ba2']} style={styles.container}>
+    <View style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={onBack}>
+        <TouchableOpacity onPress={handleBack}>
           <Text style={styles.headerBack}>←</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Our Moments 📸</Text>
@@ -260,7 +267,6 @@ export default function MomentsScreen({ onBack, onNavigate }) {
         </TouchableOpacity>
       </View>
 
-      {/* Premium/Limit Banner */}
       {isPremium ? (
         <View style={styles.premiumBadge}>
           <Text style={styles.premiumBadgeText}>💎 Premium - Unlimited Photos</Text>
@@ -294,7 +300,6 @@ export default function MomentsScreen({ onBack, onNavigate }) {
         />
       )}
 
-      {/* Full Image Modal */}
       <Modal visible={!!selectedMoment} transparent animationType="fade">
         <View style={styles.modalContainer}>
           <TouchableOpacity
@@ -330,7 +335,7 @@ export default function MomentsScreen({ onBack, onNavigate }) {
           )}
         </View>
       </Modal>
-    </LinearGradient>
+    </View>
   );
 }
 
@@ -347,7 +352,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: 60,
     paddingHorizontal: 20,
     paddingBottom: 16,
   },
@@ -365,8 +369,6 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '300',
   },
-
-  // Premium/Limit Banners
   premiumBadge: {
     backgroundColor: 'rgba(255, 215, 0, 0.2)',
     marginHorizontal: 16,
@@ -414,8 +416,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFD700',
     borderRadius: 2,
   },
-
-  // Grid
   grid: {
     padding: 12,
   },
@@ -443,8 +443,6 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '600',
   },
-
-  // Empty State
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -466,8 +464,6 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.7)',
     textAlign: 'center',
   },
-
-  // No Partner
   noPartnerContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -494,8 +490,6 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
   },
-
-  // Modal
   modalContainer: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.95)',

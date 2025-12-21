@@ -11,7 +11,6 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../contexts/AuthContext';
 import { 
   getPremiumStatus, 
@@ -20,7 +19,7 @@ import {
   togglePremium,
 } from '../services/premiumService';
 
-export default function PremiumScreen({ onBack }) {
+export default function PremiumScreen({ onNavigate }) {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [premiumStatus, setPremiumStatus] = useState(null);
@@ -33,25 +32,29 @@ export default function PremiumScreen({ onBack }) {
   const loadPremiumStatus = async () => {
     if (!user) return;
     setLoading(true);
-    const status = await getPremiumStatus(user.id);
-    setPremiumStatus(status);
+    try {
+      const status = await getPremiumStatus(user.id);
+      setPremiumStatus(status);
+    } catch (error) {
+      console.error('Error loading premium status:', error);
+      // If columns don't exist yet, show as free user
+      setPremiumStatus({ isPremium: false, plan: null, since: null, expires: null });
+    }
     setLoading(false);
   };
 
   const handleSubscribe = () => {
-    // In production, this would open RevenueCat paywall
-    // For now, show testing options
     Alert.alert(
       '🧪 Testing Mode',
-      'Premium payments require Apple/Google developer accounts. For testing, you can enable Premium manually.\n\nWould you like to enable Premium for testing?',
+      'Premium payments require Apple/Google developer accounts.\n\nFor testing, would you like to enable Premium now?',
       [
         { text: 'Cancel', style: 'cancel' },
         { 
-          text: 'Enable Monthly', 
+          text: 'Enable Monthly ($4.99)', 
           onPress: () => enableTestPremium('monthly')
         },
         { 
-          text: 'Enable Yearly', 
+          text: 'Enable Yearly ($39.99)', 
           onPress: () => enableTestPremium('yearly')
         },
       ]
@@ -60,12 +63,20 @@ export default function PremiumScreen({ onBack }) {
 
   const enableTestPremium = async (plan) => {
     setToggling(true);
-    const result = await togglePremium(user.id, true, plan);
-    if (result.success) {
-      await loadPremiumStatus();
-      Alert.alert('✅ Premium Enabled', `You now have Premium (${plan}) for testing!`);
-    } else {
-      Alert.alert('Error', 'Failed to enable premium. Try running the database SQL first.');
+    try {
+      const result = await togglePremium(user.id, true, plan);
+      if (result.success) {
+        await loadPremiumStatus();
+        Alert.alert('✅ Premium Enabled!', `You now have Premium (${plan}) for testing.\n\nAll features are now unlocked!`);
+      } else {
+        Alert.alert(
+          '⚠️ Database Setup Required',
+          'Please run the database-premium.sql script in your Supabase SQL Editor first.\n\nThis adds the premium columns and functions.',
+          [{ text: 'OK' }]
+        );
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Failed to enable premium. Make sure to run database-premium.sql first.');
     }
     setToggling(false);
   };
@@ -81,8 +92,13 @@ export default function PremiumScreen({ onBack }) {
           style: 'destructive',
           onPress: async () => {
             setToggling(true);
-            await togglePremium(user.id, false);
-            await loadPremiumStatus();
+            try {
+              await togglePremium(user.id, false);
+              await loadPremiumStatus();
+              Alert.alert('Premium Cancelled', 'You are now on the Free plan.');
+            } catch (error) {
+              Alert.alert('Error', 'Failed to cancel premium.');
+            }
             setToggling(false);
           }
         },
@@ -90,7 +106,11 @@ export default function PremiumScreen({ onBack }) {
     );
   };
 
-  const renderFeatureCard = (feature, index) => {
+  const handleBack = () => {
+    onNavigate('home');
+  };
+
+  const renderFeatureCard = (feature) => {
     const isPremium = premiumStatus?.isPremium;
     
     return (
@@ -124,116 +144,109 @@ export default function PremiumScreen({ onBack }) {
 
   if (loading) {
     return (
-      <LinearGradient colors={['#667eea', '#764ba2']} style={styles.container}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#fff" />
-          <Text style={styles.loadingText}>Loading...</Text>
-        </View>
-      </LinearGradient>
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#6C63FF" />
+        <Text style={styles.loadingText}>Loading...</Text>
+      </View>
     );
   }
 
   const isPremium = premiumStatus?.isPremium;
 
   return (
-    <LinearGradient colors={['#667eea', '#764ba2']} style={styles.container}>
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        <Text style={styles.title}>LoveLink</Text>
-        
-        {/* Premium Status Banner */}
-        {isPremium ? (
-          <View style={styles.premiumBanner}>
-            <Text style={styles.premiumBannerIcon}>💎</Text>
-            <Text style={styles.premiumBannerTitle}>Premium Active</Text>
-            <Text style={styles.premiumBannerPlan}>
-              {premiumStatus.plan === 'yearly' ? 'Yearly Plan' : 'Monthly Plan'}
-            </Text>
-            <Text style={styles.premiumBannerExpiry}>
-              {formatPremiumExpiry(premiumStatus.expires)}
-            </Text>
-          </View>
-        ) : (
-          <View style={styles.freeBanner}>
-            <Text style={styles.freeBannerIcon}>🆓</Text>
-            <Text style={styles.freeBannerTitle}>Free Plan</Text>
-            <Text style={styles.freeBannerSubtitle}>
-              Upgrade to unlock all features
-            </Text>
-          </View>
-        )}
-
-        {/* Features List */}
-        <View style={styles.featuresContainer}>
-          {PREMIUM_FEATURES.map((feature, index) => renderFeatureCard(feature, index))}
-        </View>
-
-        {/* Pricing */}
-        {!isPremium && (
-          <View style={styles.pricingCard}>
-            <Text style={styles.pricingTitle}>LoveLink Premium</Text>
-            <Text style={styles.pricingPrice}>$4.99/month</Text>
-            <Text style={styles.pricingAnnual}>or $39.99/year (save 33%)</Text>
-          </View>
-        )}
-
-        {/* Action Button */}
-        {isPremium ? (
-          <TouchableOpacity
-            style={styles.cancelButton}
-            onPress={handleCancelPremium}
-            disabled={toggling}
-          >
-            {toggling ? (
-              <ActivityIndicator color="#666" />
-            ) : (
-              <Text style={styles.cancelButtonText}>Manage Subscription</Text>
-            )}
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity
-            style={styles.subscribeButton}
-            onPress={handleSubscribe}
-            disabled={toggling}
-          >
-            {toggling ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <>
-                <Text style={styles.subscribeButtonIcon}>💎</Text>
-                <Text style={styles.subscribeButtonText}>Subscribe to Premium</Text>
-              </>
-            )}
-          </TouchableOpacity>
-        )}
-
-        <Text style={styles.disclaimer}>
-          {isPremium 
-            ? 'Thank you for supporting LoveLink!'
-            : 'Cancel anytime. Subscription auto-renews.'}
-        </Text>
-
-        {/* Testing Info */}
-        <View style={styles.testingInfo}>
-          <Text style={styles.testingInfoTitle}>🧪 Testing Mode</Text>
-          <Text style={styles.testingInfoText}>
-            Real payments require App Store setup. Use the button above to test Premium features.
+    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+      {/* Premium Status Banner */}
+      {isPremium ? (
+        <View style={styles.premiumBanner}>
+          <Text style={styles.premiumBannerIcon}>💎</Text>
+          <Text style={styles.premiumBannerTitle}>Premium Active</Text>
+          <Text style={styles.premiumBannerPlan}>
+            {premiumStatus.plan === 'yearly' ? 'Yearly Plan' : 'Monthly Plan'}
+          </Text>
+          <Text style={styles.premiumBannerExpiry}>
+            {formatPremiumExpiry(premiumStatus.expires)}
           </Text>
         </View>
+      ) : (
+        <View style={styles.freeBanner}>
+          <Text style={styles.freeBannerIcon}>🆓</Text>
+          <Text style={styles.freeBannerTitle}>Free Plan</Text>
+          <Text style={styles.freeBannerSubtitle}>
+            Upgrade to unlock all features
+          </Text>
+        </View>
+      )}
 
-        {/* Back Button */}
-        <TouchableOpacity style={styles.backButton} onPress={onBack}>
-          <Text style={styles.backButtonText}>← Back</Text>
+      {/* Features List */}
+      <View style={styles.featuresContainer}>
+        {PREMIUM_FEATURES.map((feature) => renderFeatureCard(feature))}
+      </View>
+
+      {/* Pricing */}
+      {!isPremium && (
+        <View style={styles.pricingCard}>
+          <Text style={styles.pricingTitle}>LoveLink Premium</Text>
+          <Text style={styles.pricingPrice}>$4.99/month</Text>
+          <Text style={styles.pricingAnnual}>or $39.99/year (save 33%)</Text>
+        </View>
+      )}
+
+      {/* Action Button */}
+      {isPremium ? (
+        <TouchableOpacity
+          style={styles.cancelButton}
+          onPress={handleCancelPremium}
+          disabled={toggling}
+        >
+          {toggling ? (
+            <ActivityIndicator color="#666" />
+          ) : (
+            <Text style={styles.cancelButtonText}>Manage Subscription</Text>
+          )}
         </TouchableOpacity>
-      </ScrollView>
-    </LinearGradient>
+      ) : (
+        <TouchableOpacity
+          style={styles.subscribeButton}
+          onPress={handleSubscribe}
+          disabled={toggling}
+        >
+          {toggling ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <>
+              <Text style={styles.subscribeButtonIcon}>💎</Text>
+              <Text style={styles.subscribeButtonText}>Subscribe to Premium</Text>
+            </>
+          )}
+        </TouchableOpacity>
+      )}
+
+      <Text style={styles.disclaimer}>
+        {isPremium 
+          ? 'Thank you for supporting LoveLink!'
+          : 'Cancel anytime. Subscription auto-renews.'}
+      </Text>
+
+      {/* Testing Info */}
+      <View style={styles.testingInfo}>
+        <Text style={styles.testingInfoTitle}>🧪 Testing Mode</Text>
+        <Text style={styles.testingInfoText}>
+          Real payments require App Store setup. Use the button above to test Premium features.
+        </Text>
+      </View>
+
+      {/* Back Button */}
+      <TouchableOpacity style={styles.backButton} onPress={handleBack}>
+        <Text style={styles.backButtonText}>← Back</Text>
+      </TouchableOpacity>
+      
+      <View style={{ height: 40 }} />
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
-  },
-  scrollView: {
     flex: 1,
     padding: 20,
   },
@@ -241,19 +254,12 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    padding: 40,
   },
   loadingText: {
     color: '#fff',
     marginTop: 10,
     fontSize: 16,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#fff',
-    textAlign: 'center',
-    marginTop: 40,
-    marginBottom: 20,
   },
   
   // Premium Status Banners
@@ -349,6 +355,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 10,
+    overflow: 'hidden',
   },
   featureValuePremium: {
     backgroundColor: '#f0e6ff',
@@ -453,7 +460,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 16,
     alignItems: 'center',
-    marginBottom: 40,
   },
   backButtonText: {
     color: '#fff',

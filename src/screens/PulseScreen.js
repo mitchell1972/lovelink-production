@@ -12,9 +12,8 @@ import {
   Vibration,
   ScrollView,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../contexts/AuthContext';
-import { sendPulse, getRecentPulses, deletePulse } from '../services/pulseService';
+import { pulseService } from '../services/pulseService';
 import { getAvailablePulsePatterns, getPremiumStatus } from '../services/premiumService';
 
 // All pulse patterns (some locked for free users)
@@ -56,10 +55,11 @@ const ALL_PULSE_PATTERNS = {
   },
 };
 
-export default function PulseScreen({ onBack, onNavigate }) {
-  const { user, profile } = useAuth();
+export default function PulseScreen({ onNavigate }) {
+  const { user, profile, partnership } = useAuth();
   const [sending, setSending] = useState(false);
-  const [recentPulses, setRecentPulses] = useState([]);
+  const [myPulses, setMyPulses] = useState([]);
+  const [receivedPulses, setReceivedPulses] = useState([]);
   const [selectedPattern, setSelectedPattern] = useState('heartbeat');
   const [availablePatterns, setAvailablePatterns] = useState(['heartbeat']);
   const [isPremium, setIsPremium] = useState(false);
@@ -72,20 +72,33 @@ export default function PulseScreen({ onBack, onNavigate }) {
 
   const loadAvailablePatterns = async () => {
     if (!user) return;
-    const status = await getPremiumStatus(user.id);
-    setIsPremium(status.isPremium);
-    const patterns = await getAvailablePulsePatterns(user.id);
-    setAvailablePatterns(patterns);
+    try {
+      const status = await getPremiumStatus(user.id);
+      setIsPremium(status.isPremium);
+      const patterns = await getAvailablePulsePatterns(user.id);
+      setAvailablePatterns(patterns);
+    } catch (error) {
+      console.error('Error loading patterns:', error);
+      setAvailablePatterns(['heartbeat']);
+    }
   };
 
   const loadPulses = async () => {
-    if (!user || !profile?.partner_id) return;
+    if (!user || !partnership?.id) return;
     try {
-      const pulses = await getRecentPulses(user.id, profile.partner_id);
-      setRecentPulses(pulses || []);
+      const [myData, receivedData] = await Promise.all([
+        pulseService.getMyPulses(partnership.id, user.id),
+        pulseService.getReceivedPulses(partnership.id, user.id),
+      ]);
+      setMyPulses(myData || []);
+      setReceivedPulses(receivedData || []);
     } catch (error) {
       console.error('Error loading pulses:', error);
     }
+  };
+
+  const handleBack = () => {
+    onNavigate('home');
   };
 
   const animatePulse = () => {
@@ -104,7 +117,7 @@ export default function PulseScreen({ onBack, onNavigate }) {
   };
 
   const handleSendPulse = async () => {
-    if (!profile?.partner_id) {
+    if (!partnership?.id) {
       Alert.alert('No Partner', 'Connect with your partner first!');
       return;
     }
@@ -112,19 +125,19 @@ export default function PulseScreen({ onBack, onNavigate }) {
     setSending(true);
     animatePulse();
     
-    // Vibrate with selected pattern
     const pattern = ALL_PULSE_PATTERNS[selectedPattern];
     Vibration.vibrate(pattern.vibration);
 
     try {
-      await sendPulse(user.id, profile.partner_id, selectedPattern);
+      await pulseService.sendPulse(partnership.id, user.id);
       await loadPulses();
       Alert.alert(
-        `${pattern.icon} Pulse Sent!`,
-        `Your partner will feel your ${pattern.name.toLowerCase()}`
+        pattern.icon + ' Pulse Sent!',
+        'Your partner will feel your ' + pattern.name.toLowerCase()
       );
     } catch (error) {
-      Alert.alert('Error', 'Failed to send pulse');
+      console.error('Error sending pulse:', error);
+      Alert.alert('Error', 'Failed to send pulse. Please try again.');
     } finally {
       setSending(false);
     }
@@ -140,8 +153,12 @@ export default function PulseScreen({ onBack, onNavigate }) {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
-            await deletePulse(pulseId);
-            await loadPulses();
+            try {
+              await pulseService.deletePulse(pulseId);
+              await loadPulses();
+            } catch (error) {
+              Alert.alert('Error', 'Failed to delete pulse');
+            }
           },
         },
       ]
@@ -168,10 +185,10 @@ export default function PulseScreen({ onBack, onNavigate }) {
           } else {
             Alert.alert(
               '🔒 Premium Pattern',
-              `"${pattern.name}" is a Premium-only pattern.\n\nUpgrade to unlock all 5 pulse patterns!`,
+              '"' + pattern.name + '" is a Premium-only pattern.\n\nUpgrade to unlock all 5 pulse patterns!',
               [
                 { text: 'Maybe Later', style: 'cancel' },
-                { text: '💎 Go Premium', onPress: () => onNavigate('Premium') },
+                { text: '💎 Go Premium', onPress: () => onNavigate('premium') },
               ]
             );
           }
@@ -195,125 +212,120 @@ export default function PulseScreen({ onBack, onNavigate }) {
     );
   };
 
-  if (!profile?.partner_id) {
+  if (!partnership?.id) {
     return (
-      <LinearGradient colors={['#667eea', '#764ba2']} style={styles.container}>
-        <View style={styles.noPartnerContainer}>
-          <Text style={styles.noPartnerIcon}>🔗</Text>
-          <Text style={styles.noPartnerText}>Connect with your partner first!</Text>
-          <TouchableOpacity style={styles.backButton} onPress={onBack}>
-            <Text style={styles.backButtonText}>← Back</Text>
-          </TouchableOpacity>
-        </View>
-      </LinearGradient>
+      <View style={styles.noPartnerContainer}>
+        <Text style={styles.noPartnerIcon}>🔗</Text>
+        <Text style={styles.noPartnerText}>Connect with your partner first!</Text>
+        <TouchableOpacity style={styles.backButton} onPress={handleBack}>
+          <Text style={styles.backButtonText}>← Back</Text>
+        </TouchableOpacity>
+      </View>
     );
   }
 
+  const allPulses = [...myPulses.map(p => ({...p, isFromMe: true})), ...receivedPulses.map(p => ({...p, isFromMe: false}))]
+    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    .slice(0, 10);
+
   return (
-    <LinearGradient colors={['#667eea', '#764ba2']} style={styles.container}>
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        <TouchableOpacity style={styles.backBtn} onPress={onBack}>
-          <Text style={styles.backBtnText}>← Back</Text>
-        </TouchableOpacity>
+    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+      <TouchableOpacity style={styles.backBtn} onPress={handleBack}>
+        <Text style={styles.backBtnText}>← Back</Text>
+      </TouchableOpacity>
 
-        <Text style={styles.title}>Pulse 💓</Text>
-        <Text style={styles.subtitle}>Let them know you're thinking of them</Text>
+      <Text style={styles.title}>Pulse 💓</Text>
+      <Text style={styles.subtitle}>Let them know you're thinking of them</Text>
 
-        {/* Premium Badge */}
-        {isPremium ? (
-          <View style={styles.premiumBadge}>
-            <Text style={styles.premiumBadgeText}>💎 All Patterns Unlocked</Text>
-          </View>
-        ) : (
-          <TouchableOpacity 
-            style={styles.upgradeBanner}
-            onPress={() => onNavigate('Premium')}
-          >
-            <Text style={styles.upgradeBannerText}>
-              🔓 Unlock 4 more patterns with Premium →
-            </Text>
-          </TouchableOpacity>
-        )}
-
-        {/* Pattern Selection */}
-        <Text style={styles.sectionTitle}>Choose Pattern</Text>
-        <View style={styles.patternsGrid}>
-          {Object.keys(ALL_PULSE_PATTERNS).map(renderPatternOption)}
+      {isPremium ? (
+        <View style={styles.premiumBadge}>
+          <Text style={styles.premiumBadgeText}>💎 All Patterns Unlocked</Text>
         </View>
-
-        {/* Selected Pattern Info */}
-        <View style={styles.selectedInfo}>
-          <Text style={styles.selectedInfoText}>
-            {ALL_PULSE_PATTERNS[selectedPattern].description}
-          </Text>
-        </View>
-
-        {/* Send Button */}
-        <TouchableOpacity
-          style={styles.pulseButton}
-          onPress={handleSendPulse}
-          disabled={sending}
-          activeOpacity={0.8}
+      ) : (
+        <TouchableOpacity 
+          style={styles.upgradeBanner}
+          onPress={() => onNavigate('premium')}
         >
-          <Animated.View
-            style={[
-              styles.pulseCircle,
-              { transform: [{ scale: pulseAnim }] },
-            ]}
-          >
-            <Text style={styles.pulseIcon}>
-              {ALL_PULSE_PATTERNS[selectedPattern].icon}
-            </Text>
-          </Animated.View>
-          <Text style={styles.pulseText}>
-            {sending ? 'Sending...' : 'Tap to Send Pulse'}
+          <Text style={styles.upgradeBannerText}>
+            🔓 Unlock 4 more patterns with Premium →
           </Text>
         </TouchableOpacity>
+      )}
 
-        {/* Recent Pulses */}
-        {recentPulses.length > 0 && (
-          <View style={styles.recentSection}>
-            <Text style={styles.recentTitle}>Recent Pulses</Text>
-            {recentPulses.slice(0, 5).map((pulse) => {
-              const pattern = ALL_PULSE_PATTERNS[pulse.pulse_type] || ALL_PULSE_PATTERNS.heartbeat;
-              const isFromMe = pulse.sender_id === user.id;
-              return (
-                <TouchableOpacity
-                  key={pulse.id}
-                  style={styles.pulseItem}
-                  onLongPress={() => isFromMe && handleDeletePulse(pulse.id)}
-                >
-                  <Text style={styles.pulseItemIcon}>{pattern.icon}</Text>
-                  <View style={styles.pulseItemInfo}>
-                    <Text style={styles.pulseItemText}>
-                      {isFromMe ? 'You sent' : 'Received'} {pattern.name}
-                    </Text>
-                    <Text style={styles.pulseItemTime}>
-                      {new Date(pulse.created_at).toLocaleString()}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        )}
+      <Text style={styles.sectionTitle}>Choose Pattern</Text>
+      <View style={styles.patternsGrid}>
+        {Object.keys(ALL_PULSE_PATTERNS).map(renderPatternOption)}
+      </View>
 
-        <View style={{ height: 40 }} />
-      </ScrollView>
-    </LinearGradient>
+      <View style={styles.selectedInfo}>
+        <Text style={styles.selectedInfoText}>
+          {ALL_PULSE_PATTERNS[selectedPattern].description}
+        </Text>
+      </View>
+
+      <TouchableOpacity
+        style={styles.pulseButton}
+        onPress={handleSendPulse}
+        disabled={sending}
+        activeOpacity={0.8}
+      >
+        <Animated.View
+          style={[
+            styles.pulseCircle,
+            { transform: [{ scale: pulseAnim }] },
+          ]}
+        >
+          <Text style={styles.pulseIcon}>
+            {ALL_PULSE_PATTERNS[selectedPattern].icon}
+          </Text>
+        </Animated.View>
+        <Text style={styles.pulseText}>
+          {sending ? 'Sending...' : 'Tap to Send Pulse'}
+        </Text>
+      </TouchableOpacity>
+
+      {allPulses.length > 0 && (
+        <View style={styles.recentSection}>
+          <Text style={styles.recentTitle}>Recent Pulses</Text>
+          {allPulses.map((pulse) => (
+            <TouchableOpacity
+              key={pulse.id}
+              style={styles.pulseItem}
+              onLongPress={() => pulse.isFromMe && handleDeletePulse(pulse.id)}
+            >
+              <Text style={styles.pulseItemIcon}>💓</Text>
+              <View style={styles.pulseItemInfo}>
+                <Text style={styles.pulseItemText}>
+                  {pulse.isFromMe ? 'You sent a pulse' : 'Received a pulse'}
+                </Text>
+                <Text style={styles.pulseItemTime}>
+                  {new Date(pulse.created_at).toLocaleString()}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
+      {receivedPulses.length > 0 && (
+        <View style={styles.receivedBanner}>
+          <Text style={styles.receivedText}>
+            💕 Your partner sent you {receivedPulses.length} pulse{receivedPulses.length > 1 ? 's' : ''} today!
+          </Text>
+        </View>
+      )}
+
+      <View style={{ height: 40 }} />
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-  },
-  scrollView: {
-    flex: 1,
     padding: 20,
   },
   backBtn: {
-    marginTop: 40,
     marginBottom: 10,
   },
   backBtnText: {
@@ -333,8 +345,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 20,
   },
-
-  // Premium/Upgrade Banners
   premiumBadge: {
     backgroundColor: 'rgba(255, 215, 0, 0.2)',
     padding: 10,
@@ -359,8 +369,6 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     fontSize: 13,
   },
-
-  // Pattern Selection
   sectionTitle: {
     fontSize: 16,
     fontWeight: '600',
@@ -428,8 +436,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontStyle: 'italic',
   },
-
-  // Pulse Button
   pulseButton: {
     alignItems: 'center',
     marginBottom: 32,
@@ -453,12 +459,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '500',
   },
-
-  // Recent Pulses
   recentSection: {
     backgroundColor: 'rgba(255,255,255,0.1)',
     borderRadius: 16,
     padding: 16,
+    marginBottom: 16,
   },
   recentTitle: {
     fontSize: 16,
@@ -489,8 +494,17 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
   },
-
-  // No Partner
+  receivedBanner: {
+    backgroundColor: 'rgba(255, 105, 180, 0.2)',
+    padding: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  receivedText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '500',
+  },
   noPartnerContainer: {
     flex: 1,
     justifyContent: 'center',
