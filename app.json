@@ -15,13 +15,16 @@
       "**/*"
     ],
     "ios": {
-      "supportsTablet": false,
-      "bundleIdentifier": "com.lovelink.app",
+      "supportsTablet": true,
+      "bundleIdentifier": "com.mitchellagoma.lovelink",
       "buildNumber": "1",
       "infoPlist": {
-        "NSCameraUsageDescription": "LoveLink needs camera access to share moments with your partner.",
-        "NSPhotoLibraryUsageDescription": "LoveLink needs photo library access to share moments with your partner.",
-        "NSPhotoLibraryAddUsageDescription": "LoveLink needs permission to save photos to your library."
+        "NSCameraUsageDescription": "LoveLink needs camera access to capture moments with your partner",
+        "NSPhotoLibraryUsageDescription": "LoveLink needs photo library access to share moments with your partner",
+        "NSPhotoLibraryAddUsageDescription": "LoveLink needs permission to save photos to your library"
+      },
+      "config": {
+        "usesNonExemptEncryption": false
       }
     },
     "android": {
@@ -29,13 +32,14 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#6C63FF"
       },
-      "package": "com.lovelink.app",
+      "package": "com.mitchellagoma.lovelink",
       "versionCode": 1,
       "permissions": [
-        "CAMERA",
-        "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE",
-        "VIBRATE"
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.VIBRATE",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -43,24 +47,20 @@
     },
     "plugins": [
       [
-        "expo-notifications",
-        {
-          "icon": "./assets/notification-icon.png",
-          "color": "#6C63FF"
-        }
-      ],
-      [
         "expo-image-picker",
         {
-          "photosPermission": "Allow LoveLink to access your photos to share moments with your partner.",
-          "cameraPermission": "Allow LoveLink to access your camera to capture moments with your partner."
+          "photosPermission": "LoveLink needs access to your photos to share moments with your partner",
+          "cameraPermission": "LoveLink needs camera access to capture moments with your partner"
         }
-      ]
+      ],
+      "expo-asset",
+      "expo-font"
     ],
     "extra": {
       "eas": {
-        "projectId": "your-eas-project-id"
+        "projectId": "b10027c4-29b9-40d7-999b-6d63942cc450"
       }
-    }
+    },
+    "owner": "mitchellagoma"
   }
 }

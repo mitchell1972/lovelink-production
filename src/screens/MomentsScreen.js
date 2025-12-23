@@ -112,18 +112,45 @@ export default function MomentsScreen({ onNavigate }) {
       console.error('Error checking limits:', error);
     }
 
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Please allow photo access to add moments.');
-      return;
+    // Show choice: Camera or Gallery
+    Alert.alert(
+      'Add Moment',
+      'Choose how to add your photo',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: '📷 Take Photo', onPress: () => pickImage('camera') },
+        { text: '🖼️ Choose from Gallery', onPress: () => pickImage('gallery') },
+      ]
+    );
+  };
+
+  const pickImage = async (source) => {
+    let permissionResult;
+    
+    if (source === 'camera') {
+      permissionResult = await ImagePicker.requestCameraPermissionsAsync();
+      if (permissionResult.status !== 'granted') {
+        Alert.alert('Permission needed', 'Please allow camera access to take photos.');
+        return;
+      }
+    } else {
+      permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (permissionResult.status !== 'granted') {
+        Alert.alert('Permission needed', 'Please allow photo access to add moments.');
+        return;
+      }
     }
 
-    const result = await ImagePicker.launchImageLibraryAsync({
+    const options = {
       mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
       quality: 0.8,
-    });
+    };
+
+    const result = source === 'camera' 
+      ? await ImagePicker.launchCameraAsync(options)
+      : await ImagePicker.launchImageLibraryAsync(options);
 
     if (!result.canceled && result.assets[0]) {
       setUploading(true);

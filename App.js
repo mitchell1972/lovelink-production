@@ -21,18 +21,19 @@ import {
 } from './src/screens';
 import { isSupabaseConfigured } from './src/config/supabase';
 
+// Screens that handle their own scrolling (have FlatList or ScrollView)
+const SELF_SCROLLING_SCREENS = ['moments', 'home', 'pulse', 'premium', 'settings', 'session', 'plan'];
+
 // Main app content with navigation
 const AppContent = () => {
   const { user, partnership, loading, isAuthenticated, isPaired } = useAuth();
-  const [authScreen, setAuthScreen] = useState('signup'); // 'signup' or 'login'
+  const [authScreen, setAuthScreen] = useState('signup');
   const [currentScreen, setCurrentScreen] = useState('home');
 
-  // Show loading screen while checking auth
   if (loading) {
     return <LoadingScreen message="Loading LoveLink..." />;
   }
 
-  // Check if Supabase is configured
   if (!isSupabaseConfigured()) {
     return (
       <GradientBackground>
@@ -49,7 +50,6 @@ const AppContent = () => {
     );
   }
 
-  // Not logged in - show auth screens
   if (!isAuthenticated) {
     return (
       <GradientBackground>
@@ -66,7 +66,6 @@ const AppContent = () => {
     );
   }
 
-  // Logged in but not paired - show partner linking
   if (!isPaired) {
     return (
       <GradientBackground>
@@ -79,7 +78,6 @@ const AppContent = () => {
     );
   }
 
-  // Fully authenticated and paired - show main app
   const renderScreen = () => {
     switch (currentScreen) {
       case 'home':
@@ -101,18 +99,25 @@ const AppContent = () => {
     }
   };
 
+  const isSelfScrolling = SELF_SCROLLING_SCREENS.includes(currentScreen);
+
   return (
     <GradientBackground>
       <StatusBar barStyle="light-content" />
       <Header />
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        {renderScreen()}
-      </ScrollView>
+      {isSelfScrolling ? (
+        <View style={styles.screenContainer}>
+          {renderScreen()}
+        </View>
+      ) : (
+        <ScrollView contentContainerStyle={styles.scrollContent}>
+          {renderScreen()}
+        </ScrollView>
+      )}
     </GradientBackground>
   );
 };
 
-// Root component with providers
 export default function App() {
   return (
     <AuthProvider>
@@ -126,6 +131,9 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: 'center',
     paddingVertical: 20,
+  },
+  screenContainer: {
+    flex: 1,
   },
   errorCard: {
     backgroundColor: 'white',

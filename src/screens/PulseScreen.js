@@ -146,7 +146,7 @@ export default function PulseScreen({ onNavigate }) {
   const handleDeletePulse = async (pulseId) => {
     Alert.alert(
       'Delete Pulse',
-      'Remove this pulse from history?',
+      'Remove this pulse from your history?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -156,6 +156,7 @@ export default function PulseScreen({ onNavigate }) {
             try {
               await pulseService.deletePulse(pulseId);
               await loadPulses();
+              Alert.alert('Deleted', 'Pulse removed from history');
             } catch (error) {
               Alert.alert('Error', 'Failed to delete pulse');
             }
@@ -291,7 +292,7 @@ export default function PulseScreen({ onNavigate }) {
             <TouchableOpacity
               key={pulse.id}
               style={styles.pulseItem}
-              onLongPress={() => pulse.isFromMe && handleDeletePulse(pulse.id)}
+              onLongPress={() => handleDeletePulse(pulse.id)}
             >
               <Text style={styles.pulseItemIcon}>💓</Text>
               <View style={styles.pulseItemInfo}>
@@ -302,8 +303,10 @@ export default function PulseScreen({ onNavigate }) {
                   {new Date(pulse.created_at).toLocaleString()}
                 </Text>
               </View>
+              <Text style={styles.deleteHint}>🗑️</Text>
             </TouchableOpacity>
           ))}
+          <Text style={styles.deleteHintText}>Long press any pulse to delete</Text>
         </View>
       )}
 
@@ -493,6 +496,17 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.6)',
     fontSize: 12,
     marginTop: 2,
+  },
+  deleteHint: {
+    fontSize: 16,
+    opacity: 0.5,
+  },
+  deleteHintText: {
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: 11,
+    textAlign: 'center',
+    marginTop: 12,
+    fontStyle: 'italic',
   },
   receivedBanner: {
     backgroundColor: 'rgba(255, 105, 180, 0.2)',
