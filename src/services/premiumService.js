@@ -152,25 +152,8 @@ export const getAvailablePulsePatterns = async (userId) => {
   return limits.pulsePatterns;
 };
 
-/**
- * Toggle premium status (for testing/admin)
- * In production, this would be called by RevenueCat webhook
- */
-export const togglePremium = async (userId, enable, plan = 'monthly') => {
-  try {
-    const { error } = await supabase.rpc('toggle_premium', {
-      user_id: userId,
-      enable: enable,
-      plan: plan,
-    });
-
-    if (error) throw error;
-    return { success: true };
-  } catch (error) {
-    console.error('Error toggling premium:', error);
-    return { success: false, error: error.message };
-  }
-};
+// NOTE: togglePremium testing function removed for production
+// Premium status is now only managed through real IAP purchases via iapService.js
 
 /**
  * Format premium expiry date for display
@@ -196,7 +179,6 @@ export default {
   checkFeatureAccess,
   checkMomentsLimit,
   getAvailablePulsePatterns,
-  togglePremium,
   formatPremiumExpiry,
   FEATURE_LIMITS,
   PREMIUM_FEATURES,

@@ -13,6 +13,13 @@ CREATE TABLE public.profiles (
   email TEXT NOT NULL,
   avatar_url TEXT,
   partner_id UUID REFERENCES public.profiles(id),
+  -- Premium subscription fields (managed by real IAP only)
+  is_premium BOOLEAN DEFAULT FALSE,
+  premium_plan TEXT CHECK (premium_plan IN ('monthly', 'yearly')),
+  premium_since TIMESTAMPTZ,
+  premium_expires TIMESTAMPTZ,
+  iap_transaction_id TEXT,
+  iap_product_id TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );

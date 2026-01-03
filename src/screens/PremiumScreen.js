@@ -1,5 +1,5 @@
 // src/screens/PremiumScreen.js
-// Premium subscription screen with actual status checking
+// Premium subscription screen with REAL Apple In-App Purchases
 
 import React, { useState, useEffect } from 'react';
 import {
@@ -10,104 +10,161 @@ import {
   ScrollView,
   Alert,
   ActivityIndicator,
+  Linking,
+  Platform,
 } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
 import { 
   getPremiumStatus, 
   PREMIUM_FEATURES,
   formatPremiumExpiry,
-  togglePremium,
 } from '../services/premiumService';
+import {
+  iapService,
+  PRODUCT_IDS,
+  initializeIAP,
+  getProducts,
+  purchaseSubscription,
+  restorePurchases,
+  savePurchaseToDatabase,
+} from '../services/iapService';
 
 export default function PremiumScreen({ onNavigate }) {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [premiumStatus, setPremiumStatus] = useState(null);
-  const [toggling, setToggling] = useState(false);
+  const [purchasing, setPurchasing] = useState(false);
+  const [products, setProducts] = useState([]);
+  const [selectedPlan, setSelectedPlan] = useState('monthly');
+  const [restoring, setRestoring] = useState(false);
 
   useEffect(() => {
-    loadPremiumStatus();
+    initializeScreen();
+    
+    // Cleanup on unmount
+    return () => {
+      iapService.removeListeners();
+    };
   }, []);
 
-  const loadPremiumStatus = async () => {
-    if (!user) return;
+  const initializeScreen = async () => {
     setLoading(true);
     try {
-      const status = await getPremiumStatus(user.id);
-      setPremiumStatus(status);
+      // Load premium status from database
+      if (user) {
+        const status = await getPremiumStatus(user.id);
+        setPremiumStatus(status);
+      }
+
+      // Initialize IAP and fetch products
+      await initializeIAP();
+      const availableProducts = await getProducts();
+      setProducts(availableProducts);
+      
+      console.log('Products loaded:', availableProducts);
     } catch (error) {
-      console.error('Error loading premium status:', error);
-      // If columns don't exist yet, show as free user
+      console.error('Error initializing premium screen:', error);
       setPremiumStatus({ isPremium: false, plan: null, since: null, expires: null });
     }
     setLoading(false);
   };
 
-  const handleSubscribe = () => {
-    Alert.alert(
-      '🧪 Testing Mode',
-      'Premium payments require Apple/Google developer accounts.\n\nFor testing, would you like to enable Premium now?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Enable Monthly ($4.99)', 
-          onPress: () => enableTestPremium('monthly')
-        },
-        { 
-          text: 'Enable Yearly ($39.99)', 
-          onPress: () => enableTestPremium('yearly')
-        },
-      ]
-    );
-  };
+  const handleSubscribe = async () => {
+    if (purchasing) return;
 
-  const enableTestPremium = async (plan) => {
-    setToggling(true);
+    const productId = selectedPlan === 'yearly' 
+      ? PRODUCT_IDS.YEARLY 
+      : PRODUCT_IDS.MONTHLY;
+
+    setPurchasing(true);
+
     try {
-      const result = await togglePremium(user.id, true, plan);
+      // This triggers the Apple payment sheet
+      const result = await purchaseSubscription(productId);
+
       if (result.success) {
-        await loadPremiumStatus();
-        Alert.alert('✅ Premium Enabled!', `You now have Premium (${plan}) for testing.\n\nAll features are now unlocked!`);
-      } else {
+        // Save to database
+        await savePurchaseToDatabase(user.id, result.purchase, selectedPlan);
+        
+        // Refresh status
+        const status = await getPremiumStatus(user.id);
+        setPremiumStatus(status);
+
         Alert.alert(
-          '⚠️ Database Setup Required',
-          'Please run the database-premium.sql script in your Supabase SQL Editor first.\n\nThis adds the premium columns and functions.',
-          [{ text: 'OK' }]
+          '🎉 Welcome to Premium!',
+          'Thank you for subscribing! All premium features are now unlocked.',
+          [{ text: 'Awesome!' }]
         );
+      } else if (result.cancelled) {
+        // User cancelled - do nothing
+        console.log('Purchase cancelled by user');
+      } else {
+        Alert.alert('Purchase Failed', result.error || 'Unable to complete purchase. Please try again.');
       }
     } catch (error) {
-      Alert.alert('Error', 'Failed to enable premium. Make sure to run database-premium.sql first.');
+      console.error('Purchase error:', error);
+      Alert.alert('Error', 'An error occurred during purchase. Please try again.');
     }
-    setToggling(false);
+
+    setPurchasing(false);
   };
 
-  const handleCancelPremium = () => {
-    Alert.alert(
-      'Cancel Premium',
-      'Are you sure you want to cancel your Premium subscription?',
-      [
-        { text: 'Keep Premium', style: 'cancel' },
-        { 
-          text: 'Cancel Subscription', 
-          style: 'destructive',
-          onPress: async () => {
-            setToggling(true);
-            try {
-              await togglePremium(user.id, false);
-              await loadPremiumStatus();
-              Alert.alert('Premium Cancelled', 'You are now on the Free plan.');
-            } catch (error) {
-              Alert.alert('Error', 'Failed to cancel premium.');
-            }
-            setToggling(false);
-          }
-        },
-      ]
-    );
+  const handleRestorePurchases = async () => {
+    setRestoring(true);
+
+    try {
+      const purchases = await restorePurchases();
+
+      if (purchases && purchases.length > 0) {
+        // Find the most recent subscription
+        const subscription = purchases.find(p => 
+          p.productId === PRODUCT_IDS.MONTHLY || p.productId === PRODUCT_IDS.YEARLY
+        );
+
+        if (subscription) {
+          const plan = subscription.productId === PRODUCT_IDS.YEARLY ? 'yearly' : 'monthly';
+          await savePurchaseToDatabase(user.id, subscription, plan);
+          
+          const status = await getPremiumStatus(user.id);
+          setPremiumStatus(status);
+
+          Alert.alert('Restored!', 'Your Premium subscription has been restored.');
+        } else {
+          Alert.alert('No Subscription Found', 'No active subscription found to restore.');
+        }
+      } else {
+        Alert.alert('No Purchases Found', 'No previous purchases found to restore.');
+      }
+    } catch (error) {
+      console.error('Restore error:', error);
+      Alert.alert('Error', 'Unable to restore purchases. Please try again.');
+    }
+
+    setRestoring(false);
+  };
+
+  const handleManageSubscription = () => {
+    // Open device subscription settings
+    if (Platform.OS === 'ios') {
+      Linking.openURL('https://apps.apple.com/account/subscriptions');
+    } else {
+      Linking.openURL('https://play.google.com/store/account/subscriptions');
+    }
   };
 
   const handleBack = () => {
     onNavigate('home');
+  };
+
+  const getDisplayPrice = (type) => {
+    const productId = type === 'yearly' ? PRODUCT_IDS.YEARLY : PRODUCT_IDS.MONTHLY;
+    const product = products.find(p => p.productId === productId);
+    
+    if (product) {
+      return product.localizedPrice;
+    }
+    // Fallback prices
+    return type === 'yearly' ? '£39.99/year' : '£3.99/month';
   };
 
   const renderFeatureCard = (feature) => {
@@ -182,57 +239,112 @@ export default function PremiumScreen({ onNavigate }) {
         {PREMIUM_FEATURES.map((feature) => renderFeatureCard(feature))}
       </View>
 
-      {/* Pricing */}
+      {/* Subscription Options */}
       {!isPremium && (
-        <View style={styles.pricingCard}>
-          <Text style={styles.pricingTitle}>LoveLink Premium</Text>
-          <Text style={styles.pricingPrice}>$4.99/month</Text>
-          <Text style={styles.pricingAnnual}>or $39.99/year (save 33%)</Text>
+        <View style={styles.subscriptionOptions}>
+          <Text style={styles.subscriptionTitle}>Choose Your Plan</Text>
+          
+          {/* Monthly Option */}
+          <TouchableOpacity
+            style={[
+              styles.planOption,
+              selectedPlan === 'monthly' && styles.planOptionSelected
+            ]}
+            onPress={() => setSelectedPlan('monthly')}
+          >
+            <View style={styles.planInfo}>
+              <Text style={styles.planName}>Monthly</Text>
+              <Text style={styles.planPrice}>{getDisplayPrice('monthly')}</Text>
+            </View>
+            <View style={[
+              styles.planRadio,
+              selectedPlan === 'monthly' && styles.planRadioSelected
+            ]}>
+              {selectedPlan === 'monthly' && <View style={styles.planRadioInner} />}
+            </View>
+          </TouchableOpacity>
+
+          {/* Yearly Option */}
+          <TouchableOpacity
+            style={[
+              styles.planOption,
+              selectedPlan === 'yearly' && styles.planOptionSelected
+            ]}
+            onPress={() => setSelectedPlan('yearly')}
+          >
+            <View style={styles.planInfo}>
+              <Text style={styles.planName}>Yearly</Text>
+              <Text style={styles.planPrice}>{getDisplayPrice('yearly')}</Text>
+              <Text style={styles.planSavings}>Save 33%</Text>
+            </View>
+            <View style={[
+              styles.planRadio,
+              selectedPlan === 'yearly' && styles.planRadioSelected
+            ]}>
+              {selectedPlan === 'yearly' && <View style={styles.planRadioInner} />}
+            </View>
+          </TouchableOpacity>
         </View>
       )}
 
-      {/* Action Button */}
+      {/* Action Buttons */}
       {isPremium ? (
         <TouchableOpacity
-          style={styles.cancelButton}
-          onPress={handleCancelPremium}
-          disabled={toggling}
+          style={styles.manageButton}
+          onPress={handleManageSubscription}
         >
-          {toggling ? (
-            <ActivityIndicator color="#666" />
-          ) : (
-            <Text style={styles.cancelButtonText}>Manage Subscription</Text>
-          )}
+          <Text style={styles.manageButtonText}>Manage Subscription</Text>
         </TouchableOpacity>
       ) : (
-        <TouchableOpacity
-          style={styles.subscribeButton}
-          onPress={handleSubscribe}
-          disabled={toggling}
-        >
-          {toggling ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <>
-              <Text style={styles.subscribeButtonIcon}>💎</Text>
-              <Text style={styles.subscribeButtonText}>Subscribe to Premium</Text>
-            </>
-          )}
-        </TouchableOpacity>
+        <>
+          <TouchableOpacity
+            style={[styles.subscribeButton, purchasing && styles.buttonDisabled]}
+            onPress={handleSubscribe}
+            disabled={purchasing || restoring}
+          >
+            {purchasing ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <>
+                <Text style={styles.subscribeButtonIcon}>💎</Text>
+                <Text style={styles.subscribeButtonText}>
+                  Subscribe Now
+                </Text>
+              </>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.restoreButton, restoring && styles.buttonDisabled]}
+            onPress={handleRestorePurchases}
+            disabled={purchasing || restoring}
+          >
+            {restoring ? (
+              <ActivityIndicator color="#6C63FF" />
+            ) : (
+              <Text style={styles.restoreButtonText}>Restore Purchases</Text>
+            )}
+          </TouchableOpacity>
+        </>
       )}
 
-      <Text style={styles.disclaimer}>
-        {isPremium 
-          ? 'Thank you for supporting LoveLink!'
-          : 'Cancel anytime. Subscription auto-renews.'}
-      </Text>
-
-      {/* Testing Info */}
-      <View style={styles.testingInfo}>
-        <Text style={styles.testingInfoTitle}>🧪 Testing Mode</Text>
-        <Text style={styles.testingInfoText}>
-          Real payments require App Store setup. Use the button above to test Premium features.
+      {/* Legal Text */}
+      <View style={styles.legalContainer}>
+        <Text style={styles.legalText}>
+          {isPremium 
+            ? 'Thank you for supporting LoveLink!'
+            : `Payment will be charged to your ${Platform.OS === 'ios' ? 'Apple ID' : 'Google Play'} account at confirmation of purchase. Subscription automatically renews unless auto-renew is turned off at least 24-hours before the end of the current period.`
+          }
         </Text>
+        <View style={styles.legalLinks}>
+          <TouchableOpacity onPress={() => Linking.openURL('https://mitchell1972.github.io/lovelink-web/privacy.html')}>
+            <Text style={styles.legalLink}>Privacy Policy</Text>
+          </TouchableOpacity>
+          <Text style={styles.legalSeparator}>•</Text>
+          <TouchableOpacity onPress={() => Linking.openURL('https://mitchell1972.github.io/lovelink-web/terms.html')}>
+            <Text style={styles.legalLink}>Terms of Use</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Back Button */}
@@ -372,29 +484,71 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
 
-  // Pricing
-  pricingCard: {
+  // Subscription Options
+  subscriptionOptions: {
     backgroundColor: 'rgba(255, 255, 255, 0.95)',
     borderRadius: 16,
-    padding: 24,
-    alignItems: 'center',
+    padding: 20,
     marginBottom: 16,
   },
-  pricingTitle: {
+  subscriptionTitle: {
     fontSize: 18,
     fontWeight: '600',
     color: '#333',
+    marginBottom: 16,
+    textAlign: 'center',
   },
-  pricingPrice: {
-    fontSize: 36,
+  planOption: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#e0e0e0',
+    marginBottom: 12,
+  },
+  planOptionSelected: {
+    borderColor: '#6C63FF',
+    backgroundColor: 'rgba(108, 99, 255, 0.05)',
+  },
+  planInfo: {
+    flex: 1,
+  },
+  planName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+  },
+  planPrice: {
+    fontSize: 20,
     fontWeight: 'bold',
     color: '#6C63FF',
-    marginTop: 8,
-  },
-  pricingAnnual: {
-    fontSize: 14,
-    color: '#666',
     marginTop: 4,
+  },
+  planSavings: {
+    fontSize: 12,
+    color: '#22c55e',
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  planRadio: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#ccc',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  planRadioSelected: {
+    borderColor: '#6C63FF',
+  },
+  planRadioInner: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#6C63FF',
   },
 
   // Buttons
@@ -416,42 +570,58 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
   },
-  cancelButton: {
+  buttonDisabled: {
+    opacity: 0.7,
+  },
+  restoreButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 12,
+    padding: 14,
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  restoreButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  manageButton: {
     backgroundColor: 'rgba(255, 255, 255, 0.2)',
     borderRadius: 12,
     padding: 18,
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 16,
   },
-  cancelButtonText: {
+  manageButtonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: '500',
   },
-  disclaimer: {
-    textAlign: 'center',
-    color: 'rgba(255, 255, 255, 0.7)',
-    fontSize: 13,
-    marginBottom: 20,
-  },
 
-  // Testing Info
-  testingInfo: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 12,
-    padding: 16,
+  // Legal
+  legalContainer: {
     marginBottom: 20,
   },
-  testingInfoTitle: {
-    color: '#fff',
-    fontWeight: '600',
-    fontSize: 14,
-    marginBottom: 4,
+  legalText: {
+    textAlign: 'center',
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: 11,
+    lineHeight: 16,
+    marginBottom: 12,
   },
-  testingInfoText: {
-    color: 'rgba(255, 255, 255, 0.7)',
+  legalLinks: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  legalLink: {
+    color: 'rgba(255, 255, 255, 0.8)',
     fontSize: 12,
-    lineHeight: 18,
+    textDecorationLine: 'underline',
+  },
+  legalSeparator: {
+    color: 'rgba(255, 255, 255, 0.5)',
+    marginHorizontal: 8,
   },
 
   // Back Button

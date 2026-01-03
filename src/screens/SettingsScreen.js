@@ -281,7 +281,7 @@ export const SettingsScreen = ({ onNavigate }) => {
         </View>
 
         <View style={styles.version}>
-          <Text style={styles.versionText}>LoveLink v1.0.0</Text>
+          <Text style={styles.versionText}>LoveLink v1.0.2</Text>
         </View>
 
         <Button 
