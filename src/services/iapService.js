@@ -6,7 +6,7 @@ import {
   initConnection,
   endConnection,
   getSubscriptions,
-  requestSubscription,
+  requestPurchase,
   getAvailablePurchases,
   finishTransaction,
   purchaseUpdatedListener,
@@ -86,8 +86,8 @@ class IAPService {
 
       console.log('Requesting subscription:', productId);
 
-      // Request the subscription - this shows the Apple payment sheet
-      const purchase = await requestSubscription({
+      // Request the purchase - this shows the Apple payment sheet
+      const purchase = await requestPurchase({
         sku: productId,
         andDangerouslyFinishTransactionAutomaticallyIOS: false,
       });
