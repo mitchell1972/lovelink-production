@@ -5,8 +5,8 @@ import { Platform } from 'react-native';
 import {
   initConnection,
   endConnection,
-  fetchProducts,
-  requestPurchase,
+  getSubscriptions,
+  requestSubscription,
   getAvailablePurchases,
   finishTransaction,
   purchaseUpdatedListener,
@@ -63,14 +63,14 @@ class IAPService {
     try {
       await this.initialize();
 
-      // Get products - v14+ API uses fetchProducts
-      const products = await fetchProducts({ skus: subscriptionSkus });
-      console.log('Available products:', products);
+      // Get subscriptions - use getSubscriptions for subscription products
+      const products = await getSubscriptions({ skus: subscriptionSkus });
+      console.log('Available subscriptions:', products);
 
       this.products = products;
       return products;
     } catch (error) {
-      console.error('Error fetching products:', error);
+      console.error('Error fetching subscriptions:', error);
       return [];
     }
   }
@@ -86,26 +86,53 @@ class IAPService {
 
       console.log('Requesting subscription:', productId);
 
-      // Request the purchase - this shows the Apple payment sheet
-      const purchase = await requestPurchase({
+      // Request the subscription - this shows the Apple payment sheet
+      const purchase = await requestSubscription({
         sku: productId,
         andDangerouslyFinishTransactionAutomaticallyIOS: false,
       });
 
-      console.log('Purchase successful:', purchase);
+      console.log('Purchase result:', JSON.stringify(purchase, null, 2));
+
+      // CRITICAL: Verify we actually have a valid purchase with transaction info
+      if (!purchase) {
+        console.error('No purchase object returned');
+        return { success: false, error: 'No purchase data received' };
+      }
+
+      // Check for valid transaction ID (required for real purchases)
+      if (!purchase.transactionId && !purchase.transactionReceipt) {
+        console.error('Purchase missing transaction ID or receipt');
+        return { success: false, error: 'Invalid purchase - no transaction' };
+      }
+
+      console.log('Purchase successful with transaction:', purchase.transactionId);
 
       // Finish the transaction
-      if (Platform.OS === 'ios' && purchase) {
-        await finishTransaction({ purchase, isConsumable: false });
+      if (Platform.OS === 'ios') {
+        try {
+          await finishTransaction({ purchase, isConsumable: false });
+          console.log('Transaction finished successfully');
+        } catch (finishError) {
+          console.error('Error finishing transaction:', finishError);
+          // Still return success if purchase was made
+        }
       }
 
       return { success: true, purchase };
     } catch (error) {
       console.error('Purchase error:', error);
+      console.error('Error code:', error.code);
+      console.error('Error message:', error.message);
 
       // Handle user cancellation
       if (error.code === 'E_USER_CANCELLED') {
         return { success: false, error: 'Purchase cancelled', cancelled: true };
+      }
+
+      // Handle other known error codes
+      if (error.code === 'E_UNKNOWN' || error.code === 'E_SERVICE_ERROR') {
+        return { success: false, error: 'App Store service error. Please try again.' };
       }
 
       return { success: false, error: error.message || 'Purchase failed' };
