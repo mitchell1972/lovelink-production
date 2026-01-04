@@ -87,10 +87,8 @@ class IAPService {
       console.log('Requesting subscription:', productId);
 
       // Request the purchase - this shows the Apple payment sheet
-      const purchase = await requestPurchase({
-        sku: productId,
-        andDangerouslyFinishTransactionAutomaticallyIOS: false,
-      });
+      // For react-native-iap v14+, just pass the sku
+      const purchase = await requestPurchase({ sku: productId });
 
       console.log('Purchase result:', JSON.stringify(purchase, null, 2));
 
