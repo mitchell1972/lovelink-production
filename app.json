@@ -17,7 +17,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.mitchellagoma.lovelink",
-      "buildNumber": "10",
+      "buildNumber": "11",
       "infoPlist": {
         "NSCameraUsageDescription": "LoveLink needs camera access to capture moments with your partner",
         "NSPhotoLibraryUsageDescription": "LoveLink needs photo library access to share moments with your partner",

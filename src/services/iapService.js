@@ -2,17 +2,7 @@
 // Real In-App Purchase service using react-native-iap v14+
 
 import { Platform } from 'react-native';
-import {
-  initConnection,
-  endConnection,
-  getSubscriptions,
-  requestSubscription,
-  getAvailablePurchases,
-  finishTransaction,
-  purchaseUpdatedListener,
-  purchaseErrorListener,
-  acknowledgePurchaseAndroid,
-} from 'react-native-iap';
+import * as RNIap from 'react-native-iap';
 import { supabase } from '../config/supabase';
 
 // Product IDs - matching App Store Connect
@@ -43,10 +33,11 @@ class IAPService {
 
     try {
       // Initialize connection to store
-      const result = await initConnection();
+      const result = await RNIap.initConnection();
       console.log('IAP Connection initialized:', result);
 
-      // Note: clearTransactionIOS removed in v14 - handled automatically
+      // Log available functions for debugging
+      console.log('RNIap available functions:', Object.keys(RNIap).filter(k => typeof RNIap[k] === 'function'));
 
       this.isInitialized = true;
       return true;
@@ -64,7 +55,7 @@ class IAPService {
       await this.initialize();
 
       // Get subscriptions - use getSubscriptions for subscription products
-      const products = await getSubscriptions({ skus: subscriptionSkus });
+      const products = await RNIap.getSubscriptions({ skus: subscriptionSkus });
       console.log('Available subscriptions:', products);
 
       this.products = products;
@@ -85,10 +76,40 @@ class IAPService {
       await this.initialize();
 
       console.log('Requesting subscription:', productId);
+      console.log('Available RNIap methods:', Object.keys(RNIap));
 
-      // Request the purchase - this shows the Apple payment sheet
-      // For subscriptions, use requestSubscription
-      const purchase = await requestSubscription({ sku: productId });
+      // Find the product to get offer details if available
+      const product = this.products.find(p => p.productId === productId);
+      console.log('Product found:', product ? 'yes' : 'no');
+
+      let purchase;
+
+      // Try requestSubscription first, fall back to requestPurchase
+      if (Platform.OS === 'ios') {
+        // For iOS, try different approaches
+        if (typeof RNIap.requestSubscription === 'function') {
+          console.log('Using requestSubscription');
+          purchase = await RNIap.requestSubscription({ sku: productId });
+        } else if (typeof RNIap.requestPurchase === 'function') {
+          console.log('Using requestPurchase as fallback');
+          purchase = await RNIap.requestPurchase({ sku: productId });
+        } else {
+          throw new Error('No purchase method available');
+        }
+      } else {
+        // Android
+        if (typeof RNIap.requestSubscription === 'function') {
+          purchase = await RNIap.requestSubscription({
+            sku: productId,
+            subscriptionOffers: [{
+              sku: productId,
+              offerToken: product?.subscriptionOfferDetails?.[0]?.offerToken || '',
+            }],
+          });
+        } else {
+          purchase = await RNIap.requestPurchase({ sku: productId });
+        }
+      }
 
       console.log('Purchase result:', JSON.stringify(purchase, null, 2));
 
@@ -109,7 +130,7 @@ class IAPService {
       // Finish the transaction
       if (Platform.OS === 'ios') {
         try {
-          await finishTransaction({ purchase, isConsumable: false });
+          await RNIap.finishTransaction({ purchase, isConsumable: false });
           console.log('Transaction finished successfully');
         } catch (finishError) {
           console.error('Error finishing transaction:', finishError);
@@ -144,7 +165,7 @@ class IAPService {
     try {
       await this.initialize();
 
-      const purchases = await getAvailablePurchases();
+      const purchases = await RNIap.getAvailablePurchases();
       console.log('Restored purchases:', purchases);
 
       return purchases;
@@ -164,8 +185,6 @@ class IAPService {
       // Check for valid subscription
       for (const purchase of purchases) {
         if (subscriptionSkus.includes(purchase.productId)) {
-          // Verify the receipt is valid and not expired
-          // In production, you should verify this server-side
           return {
             isActive: true,
             productId: purchase.productId,
@@ -228,39 +247,43 @@ class IAPService {
     this.removeListeners();
 
     // Listen for purchase updates
-    this.purchaseUpdateSubscription = purchaseUpdatedListener(
-      async (purchase) => {
-        console.log('Purchase updated:', purchase);
+    if (typeof RNIap.purchaseUpdatedListener === 'function') {
+      this.purchaseUpdateSubscription = RNIap.purchaseUpdatedListener(
+        async (purchase) => {
+          console.log('Purchase updated:', purchase);
 
-        const receipt = purchase.transactionReceipt;
-        if (receipt) {
-          // Finish the transaction
-          try {
-            if (Platform.OS === 'ios') {
-              await finishTransaction({ purchase, isConsumable: false });
-            } else {
-              await acknowledgePurchaseAndroid({
-                token: purchase.purchaseToken,
-              });
-            }
+          const receipt = purchase.transactionReceipt;
+          if (receipt) {
+            // Finish the transaction
+            try {
+              if (Platform.OS === 'ios') {
+                await RNIap.finishTransaction({ purchase, isConsumable: false });
+              } else if (typeof RNIap.acknowledgePurchaseAndroid === 'function') {
+                await RNIap.acknowledgePurchaseAndroid({
+                  token: purchase.purchaseToken,
+                });
+              }
 
-            if (onPurchaseSuccess) {
-              onPurchaseSuccess(purchase);
+              if (onPurchaseSuccess) {
+                onPurchaseSuccess(purchase);
+              }
+            } catch (error) {
+              console.error('Error finishing transaction:', error);
             }
-          } catch (error) {
-            console.error('Error finishing transaction:', error);
           }
         }
-      }
-    );
+      );
+    }
 
     // Listen for purchase errors
-    this.purchaseErrorSubscription = purchaseErrorListener((error) => {
-      console.error('Purchase error listener:', error);
-      if (onPurchaseError) {
-        onPurchaseError(error);
-      }
-    });
+    if (typeof RNIap.purchaseErrorListener === 'function') {
+      this.purchaseErrorSubscription = RNIap.purchaseErrorListener((error) => {
+        console.error('Purchase error listener:', error);
+        if (onPurchaseError) {
+          onPurchaseError(error);
+        }
+      });
+    }
   }
 
   /**
@@ -282,7 +305,7 @@ class IAPService {
    */
   async endConnection() {
     this.removeListeners();
-    await endConnection();
+    await RNIap.endConnection();
     this.isInitialized = false;
   }
 
