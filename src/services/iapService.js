@@ -37,7 +37,8 @@ class IAPService {
       console.log('IAP Connection initialized:', result);
 
       // Log available functions for debugging
-      console.log('RNIap available functions:', Object.keys(RNIap).filter(k => typeof RNIap[k] === 'function'));
+      const availableFunctions = Object.keys(RNIap).filter(k => typeof RNIap[k] === 'function');
+      console.log('RNIap available functions:', availableFunctions.join(', '));
 
       this.isInitialized = true;
       return true;
@@ -54,9 +55,12 @@ class IAPService {
     try {
       await this.initialize();
 
+      console.log('Fetching subscriptions for SKUs:', subscriptionSkus);
+
       // Get subscriptions - use getSubscriptions for subscription products
       const products = await RNIap.getSubscriptions({ skus: subscriptionSkus });
-      console.log('Available subscriptions:', products);
+      console.log('Available subscriptions count:', products.length);
+      console.log('Available subscriptions:', JSON.stringify(products, null, 2));
 
       this.products = products;
       return products;
@@ -73,37 +77,94 @@ class IAPService {
    */
   async purchaseSubscription(productId) {
     try {
-      await this.initialize();
+      // ALWAYS ensure initialized
+      const initialized = await this.initialize();
+      if (!initialized) {
+        return { success: false, error: 'Failed to initialize IAP' };
+      }
 
-      console.log('Requesting subscription:', productId);
-      console.log('Available RNIap methods:', Object.keys(RNIap));
+      console.log('=== PURCHASE DEBUG START ===');
+      console.log('Requesting subscription for productId:', productId);
+      console.log('Current products in memory:', this.products.length);
 
-      // Find the product to get offer details if available
+      // ALWAYS reload products to ensure fresh data
+      if (this.products.length === 0) {
+        console.log('No products in memory, fetching...');
+        await this.getProducts();
+      }
+
+      // Find the product to ensure it exists
       const product = this.products.find(p => p.productId === productId);
-      console.log('Product found:', product ? 'yes' : 'no');
+      console.log('Product found:', product ? 'YES' : 'NO');
+      
+      if (!product) {
+        console.error('Product not found in App Store. ProductId:', productId);
+        console.error('Available products:', this.products.map(p => p.productId).join(', '));
+        return { 
+          success: false, 
+          error: `Product "${productId}" not found. Please ensure products are configured in App Store Connect.` 
+        };
+      }
+
+      console.log('Product details:', JSON.stringify(product, null, 2));
 
       let purchase;
 
-      // Try requestSubscription first, fall back to requestPurchase
+      // iOS-specific purchase flow
       if (Platform.OS === 'ios') {
-        // For iOS, try different approaches
+        console.log('Platform: iOS');
+        
+        // Try requestSubscription first (the correct method for subscriptions)
         if (typeof RNIap.requestSubscription === 'function') {
-          console.log('Using requestSubscription');
-          purchase = await RNIap.requestSubscription({ sku: productId });
+          console.log('Calling RNIap.requestSubscription with sku:', productId);
+          
+          try {
+            // For iOS StoreKit 2, just pass the sku
+            purchase = await RNIap.requestSubscription({
+              sku: productId,
+            });
+            console.log('requestSubscription returned:', JSON.stringify(purchase, null, 2));
+          } catch (subError) {
+            console.error('requestSubscription error:', subError);
+            console.error('Error code:', subError.code);
+            console.error('Error message:', subError.message);
+            
+            // If requestSubscription fails, try requestPurchase as fallback
+            if (subError.message?.includes('Missing purchase') || subError.code === 'E_MISSING_PURCHASE_REQUEST') {
+              console.log('Trying requestPurchase as fallback...');
+              
+              if (typeof RNIap.requestPurchase === 'function') {
+                purchase = await RNIap.requestPurchase({
+                  sku: productId,
+                });
+                console.log('requestPurchase fallback returned:', JSON.stringify(purchase, null, 2));
+              } else {
+                throw subError;
+              }
+            } else {
+              throw subError;
+            }
+          }
         } else if (typeof RNIap.requestPurchase === 'function') {
-          console.log('Using requestPurchase as fallback');
-          purchase = await RNIap.requestPurchase({ sku: productId });
+          console.log('requestSubscription not available, using requestPurchase');
+          purchase = await RNIap.requestPurchase({
+            sku: productId,
+          });
+          console.log('requestPurchase returned:', JSON.stringify(purchase, null, 2));
         } else {
-          throw new Error('No purchase method available');
+          throw new Error('No purchase method available in react-native-iap');
         }
       } else {
         // Android
+        console.log('Platform: Android');
         if (typeof RNIap.requestSubscription === 'function') {
+          // Android needs subscriptionOffers
+          const offerToken = product?.subscriptionOfferDetails?.[0]?.offerToken || '';
           purchase = await RNIap.requestSubscription({
             sku: productId,
             subscriptionOffers: [{
               sku: productId,
-              offerToken: product?.subscriptionOfferDetails?.[0]?.offerToken || '',
+              offerToken: offerToken,
             }],
           });
         } else {
@@ -111,7 +172,8 @@ class IAPService {
         }
       }
 
-      console.log('Purchase result:', JSON.stringify(purchase, null, 2));
+      console.log('=== PURCHASE RESULT ===');
+      console.log('Purchase object:', JSON.stringify(purchase, null, 2));
 
       // CRITICAL: Verify we actually have a valid purchase with transaction info
       if (!purchase) {
@@ -140,18 +202,24 @@ class IAPService {
 
       return { success: true, purchase };
     } catch (error) {
-      console.error('Purchase error:', error);
+      console.error('=== PURCHASE ERROR ===');
+      console.error('Error:', error);
       console.error('Error code:', error.code);
       console.error('Error message:', error.message);
+      console.error('Error details:', JSON.stringify(error, null, 2));
 
       // Handle user cancellation
-      if (error.code === 'E_USER_CANCELLED') {
+      if (error.code === 'E_USER_CANCELLED' || error.code === 'E_USER_CANCELED') {
         return { success: false, error: 'Purchase cancelled', cancelled: true };
       }
 
-      // Handle other known error codes
+      // Handle known error codes
       if (error.code === 'E_UNKNOWN' || error.code === 'E_SERVICE_ERROR') {
         return { success: false, error: 'App Store service error. Please try again.' };
+      }
+
+      if (error.code === 'E_MISSING_PURCHASE_REQUEST') {
+        return { success: false, error: 'Purchase configuration error. Please restart the app and try again.' };
       }
 
       return { success: false, error: error.message || 'Purchase failed' };
