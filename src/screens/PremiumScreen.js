@@ -29,12 +29,23 @@ import {
   savePurchaseToDatabase,
 } from '../services/iapService';
 
+// Helper: normalize iOS product shapes
+const normalizeProducts = (list) => (Array.isArray(list) ? list.filter(Boolean) : (list ? [list] : []));
+
+const getPlanTypeForProductId = (productId) => {
+  if (productId === PRODUCT_IDS.YEARLY) return 'yearly';
+  if (productId === PRODUCT_IDS.MONTHLY) return 'monthly';
+  // If IDs are misconfigured, fall back on heuristic.
+  return productId?.toLowerCase().includes('year') ? 'yearly' : 'monthly';
+};
+
 export default function PremiumScreen({ onNavigate }) {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [premiumStatus, setPremiumStatus] = useState(null);
   const [purchasing, setPurchasing] = useState(false);
   const [products, setProducts] = useState([]);
+  const [iapUnavailableReason, setIapUnavailableReason] = useState(null);
   const [selectedPlan, setSelectedPlan] = useState('monthly');
   const [restoring, setRestoring] = useState(false);
 
@@ -58,13 +69,35 @@ export default function PremiumScreen({ onNavigate }) {
 
       // Initialize IAP and fetch products
       await initializeIAP();
-      const availableProducts = await getProducts();
+      const availableProductsRaw = await getProducts();
+      const availableProducts = normalizeProducts(availableProductsRaw);
       setProducts(availableProducts);
+
+      // If no products are returned, still allow the user to attempt a purchase.
+      // Apple may return 0 products while subscriptions are "Waiting for Review".
+      if (!availableProducts || availableProducts.length === 0) {
+        const msg = Platform.OS === 'ios'
+          ? 'Store did not return subscription products yet. You can still try subscribing; if Apple blocks it, you will see the real StoreKit error. (Common causes: subscriptions still "Waiting for Review", Paid Apps agreement not active, or testing without a Sandbox tester.)'
+          : 'Store did not return subscription products yet. Please try again later.';
+        setIapUnavailableReason(msg);
+      } else {
+        setIapUnavailableReason(null);
+        // Ensure selected plan matches an available product (avoid "Product not found" after selecting)
+        const hasMonthly = availableProducts.some(p => p.productId === PRODUCT_IDS.MONTHLY);
+        const hasYearly = availableProducts.some(p => p.productId === PRODUCT_IDS.YEARLY);
+        if (selectedPlan === 'monthly' && !hasMonthly && hasYearly) setSelectedPlan('yearly');
+        if (selectedPlan === 'yearly' && !hasYearly && hasMonthly) setSelectedPlan('monthly');
+      }
       
       console.log('Products loaded:', availableProducts);
     } catch (error) {
       console.error('Error initializing premium screen:', error);
       setPremiumStatus({ isPremium: false, plan: null, since: null, expires: null });
+
+      const msg = Platform.OS === 'ios'
+        ? 'Subscriptions are temporarily unavailable (store connection error). Please try again later.'
+        : 'Subscriptions are temporarily unavailable (store connection error). Please try again later.';
+      setIapUnavailableReason(msg);
     }
     setLoading(false);
   };
@@ -72,9 +105,10 @@ export default function PremiumScreen({ onNavigate }) {
   const handleSubscribe = async () => {
     if (purchasing) return;
 
-    const productId = selectedPlan === 'yearly' 
-      ? PRODUCT_IDS.YEARLY 
-      : PRODUCT_IDS.MONTHLY;
+    // Prefer the product returned by Apple, but fall back to our known SKU.
+    // This keeps the button working when Apple returns 0 products.
+    const chosen = iapService.getProductForPlan(selectedPlan);
+    const productId = chosen?.productId || (selectedPlan === 'yearly' ? PRODUCT_IDS.YEARLY : PRODUCT_IDS.MONTHLY);
 
     setPurchasing(true);
 
@@ -84,7 +118,9 @@ export default function PremiumScreen({ onNavigate }) {
 
       if (result.success) {
         // Save to database
-        await savePurchaseToDatabase(user.id, result.purchase, selectedPlan);
+        // Persist the plan that corresponds to the purchased product
+        const planType = getPlanTypeForProductId(productId);
+        await savePurchaseToDatabase(user.id, result.purchase, planType);
         
         // Refresh status
         const status = await getPremiumStatus(user.id);
@@ -110,6 +146,12 @@ export default function PremiumScreen({ onNavigate }) {
   };
 
   const handleRestorePurchases = async () => {
+    // Safety: restoring can also fail when store products are not available.
+    if (iapUnavailableReason) {
+      Alert.alert('Restore Unavailable', iapUnavailableReason);
+      return;
+    }
+
     setRestoring(true);
 
     try {
@@ -157,11 +199,11 @@ export default function PremiumScreen({ onNavigate }) {
   };
 
   const getDisplayPrice = (type) => {
-    const productId = type === 'yearly' ? PRODUCT_IDS.YEARLY : PRODUCT_IDS.MONTHLY;
-    const product = products.find(p => p.productId === productId);
-    
+    const preferred = type === 'yearly' ? PRODUCT_IDS.YEARLY : PRODUCT_IDS.MONTHLY;
+    const fallback = type === 'yearly' ? PRODUCT_IDS.MONTHLY : PRODUCT_IDS.YEARLY;
+    const product = products.find(p => p.productId === preferred) || products.find(p => p.productId === fallback);
     if (product) {
-      return product.localizedPrice;
+      return product.localizedPrice || product.price || product.priceString;
     }
     // Fallback prices
     return type === 'yearly' ? '£39.99/year' : '£3.99/month';
@@ -209,6 +251,7 @@ export default function PremiumScreen({ onNavigate }) {
   }
 
   const isPremium = premiumStatus?.isPremium;
+  const canPurchase = !isPremium;
 
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
@@ -240,7 +283,7 @@ export default function PremiumScreen({ onNavigate }) {
       </View>
 
       {/* Subscription Options */}
-      {!isPremium && (
+      {canPurchase && (
         <View style={styles.subscriptionOptions}>
           <Text style={styles.subscriptionTitle}>Choose Your Plan</Text>
           
@@ -287,6 +330,14 @@ export default function PremiumScreen({ onNavigate }) {
         </View>
       )}
 
+      {/* If store didn't return products, show info but keep purchase button enabled */}
+      {!isPremium && !!iapUnavailableReason && (
+        <View style={styles.iapUnavailableCard}>
+          <Text style={styles.iapUnavailableTitle}>Subscription Setup Pending</Text>
+          <Text style={styles.iapUnavailableText}>{iapUnavailableReason}</Text>
+        </View>
+      )}
+
       {/* Action Buttons */}
       {isPremium ? (
         <TouchableOpacity
@@ -298,7 +349,10 @@ export default function PremiumScreen({ onNavigate }) {
       ) : (
         <>
           <TouchableOpacity
-            style={[styles.subscribeButton, purchasing && styles.buttonDisabled]}
+            style={[
+              styles.subscribeButton,
+              (purchasing || restoring) && styles.buttonDisabled,
+            ]}
             onPress={handleSubscribe}
             disabled={purchasing || restoring}
           >
@@ -315,7 +369,10 @@ export default function PremiumScreen({ onNavigate }) {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.restoreButton, restoring && styles.buttonDisabled]}
+            style={[
+              styles.restoreButton,
+              (restoring || purchasing) && styles.buttonDisabled,
+            ]}
             onPress={handleRestorePurchases}
             disabled={purchasing || restoring}
           >
@@ -560,6 +617,28 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 12,
+  },
+
+  iapUnavailableCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  iapUnavailableTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  iapUnavailableText: {
+    fontSize: 13,
+    color: '#374151',
+    lineHeight: 18,
+    textAlign: 'center',
   },
   subscribeButtonIcon: {
     fontSize: 20,

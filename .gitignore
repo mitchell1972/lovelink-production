@@ -1,0 +1,8 @@
+.expo/
+node_modules/
+.DS_Store
+
+# Optional: keep local env secrets out of git
+.env
+.env.*
+

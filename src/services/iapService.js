@@ -18,6 +18,9 @@ const subscriptionSkus = Platform.select({
   android: [PRODUCT_IDS.MONTHLY, PRODUCT_IDS.YEARLY],
 });
 
+// Normalize to an array (Platform.select can return undefined in edge cases)
+const subscriptionSkusList = Array.isArray(subscriptionSkus) ? subscriptionSkus : [];
+
 class IAPService {
   constructor() {
     this.products = [];
@@ -56,19 +59,39 @@ class IAPService {
     try {
       await this.initialize();
 
-      console.log('Fetching subscriptions for SKUs:', subscriptionSkus);
+      console.log('Fetching subscriptions for SKUs:', subscriptionSkusList);
 
       // Get subscriptions - use getSubscriptions for subscription products
-      const products = await RNIap.getSubscriptions({ skus: subscriptionSkus });
-      console.log('Available subscriptions count:', products.length);
+      const products = await RNIap.getSubscriptions({ skus: subscriptionSkusList });
+      // Some versions of react-native-iap can return a single object or include nulls
+      const normalized = Array.isArray(products)
+        ? products.filter(Boolean)
+        : (products ? [products] : []);
+      console.log('Available subscriptions count:', Array.isArray(products) ? products.length : (products ? 1 : 0));
       console.log('Available subscriptions:', JSON.stringify(products, null, 2));
 
-      this.products = products;
-      return products;
+      this.products = normalized;
+      return normalized;
     } catch (error) {
       console.error('Error fetching subscriptions:', error);
       return [];
     }
+  }
+
+  /**
+   * Return the best available product for a plan type.
+   * This intentionally falls back to whichever product is available to avoid
+   * blocking purchases when Apple returns only one SKU.
+   */
+  getProductForPlan(plan) {
+    const preferredSku = plan === 'yearly' ? PRODUCT_IDS.YEARLY : PRODUCT_IDS.MONTHLY;
+    const fallbackSku = plan === 'yearly' ? PRODUCT_IDS.MONTHLY : PRODUCT_IDS.YEARLY;
+
+    return (
+      this.products.find((p) => p?.productId === preferredSku) ||
+      this.products.find((p) => p?.productId === fallbackSku) ||
+      null
+    );
   }
 
   /**
@@ -94,20 +117,22 @@ class IAPService {
         await this.getProducts();
       }
 
-      // Find the product to ensure it exists
-      const product = this.products.find(p => p.productId === productId);
-      console.log('Product found:', product ? 'YES' : 'NO');
-      
+      // Try to find the product (useful for price/offer tokens), but do NOT block
+      // purchases if Apple returned 0 products (common while IAP is still in review).
+      const product = this.products.find(p => p?.productId === productId);
+      console.log('Product found in getSubscriptions results:', product ? 'YES' : 'NO');
       if (!product) {
-        console.error('Product not found in App Store. ProductId:', productId);
-        console.error('Available products:', this.products.map(p => p.productId).join(', '));
-        return { 
-          success: false, 
-          error: `Product "${productId}" not found. Please ensure products are configured in App Store Connect.` 
-        };
+        const available = this.products.map(p => p?.productId).filter(Boolean);
+        console.warn(
+          'Proceeding with purchase even though product was not returned by getSubscriptions.\n' +
+          'Requested productId:',
+          productId,
+          '\nAvailable products:',
+          available.join(', ') || '(none)'
+        );
+      } else {
+        console.log('Product details:', JSON.stringify(product, null, 2));
       }
-
-      console.log('Product details:', JSON.stringify(product, null, 2));
 
       let purchase;
 
@@ -161,11 +186,20 @@ class IAPService {
         if (typeof RNIap.requestSubscription === 'function') {
           // Android needs subscriptionOffers
           const offerToken = product?.subscriptionOfferDetails?.[0]?.offerToken || '';
+          if (!offerToken) {
+            // Without offer tokens, Android subscription purchases cannot proceed.
+            return {
+              success: false,
+              error:
+                'Subscription offer details are missing for this product on Android. ' +
+                'Check Google Play Console subscription base plans/offers setup and ensure products load.'
+            };
+          }
           purchase = await RNIap.requestSubscription({
             sku: productId,
             subscriptionOffers: [{
               sku: productId,
-              offerToken: offerToken,
+              offerToken,
             }],
           });
         } else {
@@ -253,7 +287,7 @@ class IAPService {
 
       // Check for valid subscription
       for (const purchase of purchases) {
-        if (subscriptionSkus.includes(purchase.productId)) {
+        if (subscriptionSkusList.includes(purchase.productId)) {
           return {
             isActive: true,
             productId: purchase.productId,
