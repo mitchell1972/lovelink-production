@@ -14,10 +14,12 @@ import {
   Modal,
   Dimensions,
   RefreshControl,
+  Platform,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../contexts/AuthContext';
 import { momentsService } from '../services/momentsService';
+import { notificationService } from '../services/notificationService';
 import { checkMomentsLimit, getPremiumStatus } from '../services/premiumService';
 
 const { width } = Dimensions.get('window');
@@ -165,6 +167,13 @@ export default function MomentsScreen({ onNavigate }) {
         if (newMoment) {
           setMoments(prev => [newMoment, ...prev]);
           await checkPremiumAndLimits();
+
+          try {
+            const myName = profile?.name || user?.user_metadata?.name || 'Your partner';
+            await notificationService.notifyPartnerNewMoment(partnership.partner.id, myName);
+          } catch (notifError) {
+            console.log('[MOMENTS] Notification send failed (non-blocking):', notifError?.message || notifError);
+          }
         }
       } catch (error) {
         console.error('Upload error:', error);
@@ -176,6 +185,12 @@ export default function MomentsScreen({ onNavigate }) {
   };
 
   const promptForCaption = () => {
+    // Alert.prompt is iOS-only. On Android, skip caption input
+    // to avoid blocking uploads in production.
+    if (Platform.OS !== 'ios') {
+      return Promise.resolve('');
+    }
+
     return new Promise((resolve) => {
       Alert.prompt(
         'Add Caption',

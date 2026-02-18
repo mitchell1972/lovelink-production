@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { authService } from '../services/authService';
 import { profileService } from '../services/profileService';
 import { partnerService } from '../services/partnerService';
+import { notificationService } from '../services/notificationService';
 import { supabase } from '../config/supabase';
 
 const AuthContext = createContext({});
@@ -62,6 +63,13 @@ export const AuthProvider = ({ children }) => {
       // Load partnership if exists
       const userPartnership = await partnerService.getPartnership(userId);
       setPartnership(userPartnership);
+
+      // Best-effort: register push notifications without blocking auth flow.
+      notificationService
+        .registerForPushNotifications(userId)
+        .catch((notifErr) => {
+          console.log('[AUTH] Push notification registration skipped:', notifErr?.message || notifErr);
+        });
     } catch (err) {
       console.error('Error loading user data:', err);
     }

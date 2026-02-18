@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
 import { pulseService } from '../services/pulseService';
+import { notificationService } from '../services/notificationService';
 import { getAvailablePulsePatterns, getPremiumStatus } from '../services/premiumService';
 
 // All pulse patterns (some locked for free users)
@@ -131,6 +132,14 @@ export default function PulseScreen({ onNavigate }) {
     try {
       await pulseService.sendPulse(partnership.id, user.id);
       await loadPulses();
+
+      try {
+        const myName = profile?.name || user?.user_metadata?.name || 'Your partner';
+        await notificationService.notifyPartnerPulse(partnership.partner.id, myName);
+      } catch (notifError) {
+        console.log('[PULSE] Notification send failed (non-blocking):', notifError?.message || notifError);
+      }
+
       Alert.alert(
         pattern.icon + ' Pulse Sent!',
         'Your partner will feel your ' + pattern.name.toLowerCase()
@@ -143,7 +152,12 @@ export default function PulseScreen({ onNavigate }) {
     }
   };
 
-  const handleDeletePulse = async (pulseId) => {
+  const handleDeletePulse = async (pulse) => {
+    if (!pulse?.isFromMe) {
+      Alert.alert('Not Allowed', 'You can only delete pulses you sent.');
+      return;
+    }
+
     Alert.alert(
       'Delete Pulse',
       'Remove this pulse from your history?',
@@ -154,7 +168,7 @@ export default function PulseScreen({ onNavigate }) {
           style: 'destructive',
           onPress: async () => {
             try {
-              await pulseService.deletePulse(pulseId);
+              await pulseService.deletePulse(pulse.id, user.id);
               await loadPulses();
               Alert.alert('Deleted', 'Pulse removed from history');
             } catch (error) {
@@ -292,7 +306,7 @@ export default function PulseScreen({ onNavigate }) {
             <TouchableOpacity
               key={pulse.id}
               style={styles.pulseItem}
-              onLongPress={() => handleDeletePulse(pulse.id)}
+              onLongPress={() => handleDeletePulse(pulse)}
             >
               <Text style={styles.pulseItemIcon}>💓</Text>
               <View style={styles.pulseItemInfo}>
@@ -303,10 +317,10 @@ export default function PulseScreen({ onNavigate }) {
                   {new Date(pulse.created_at).toLocaleString()}
                 </Text>
               </View>
-              <Text style={styles.deleteHint}>🗑️</Text>
+              {pulse.isFromMe ? <Text style={styles.deleteHint}>🗑️</Text> : null}
             </TouchableOpacity>
           ))}
-          <Text style={styles.deleteHintText}>Long press any pulse to delete</Text>
+          <Text style={styles.deleteHintText}>Long press a pulse you sent to delete</Text>
         </View>
       )}
 

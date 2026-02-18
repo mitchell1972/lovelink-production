@@ -1,5 +1,6 @@
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
+import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { supabase } from '../config/supabase';
 
@@ -38,9 +39,18 @@ export const notificationService = {
         return null;
       }
 
+      const projectId =
+        Constants?.expoConfig?.extra?.eas?.projectId ||
+        Constants?.easConfig?.projectId;
+
+      if (!projectId) {
+        console.log('[NOTIFICATIONS] Missing Expo projectId in app config');
+        return null;
+      }
+
       // Get push token
       const token = await Notifications.getExpoPushTokenAsync({
-        projectId: 'your-project-id', // Replace with your Expo project ID from app.json
+        projectId,
       });
 
       console.log('[NOTIFICATIONS] Token:', token.data);

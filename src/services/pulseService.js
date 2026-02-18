@@ -63,13 +63,18 @@ export const pulseService = {
     return data;
   },
 
-  async deletePulse(pulseId) {
+  async deletePulse(pulseId, userId) {
     console.log('[PULSE SERVICE] deletePulse called:', pulseId);
+
+    if (!userId) {
+      throw new Error('Missing user id');
+    }
 
     const { error } = await supabase
       .from('pulses')
       .delete()
-      .eq('id', pulseId);
+      .eq('id', pulseId)
+      .eq('sender_id', userId);
 
     if (error) {
       console.log('[PULSE SERVICE] ERROR deleting:', error);

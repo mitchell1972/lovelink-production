@@ -3,6 +3,7 @@ import { View, Text, ScrollView, StyleSheet, Alert, TouchableOpacity, Platform }
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useAuth } from '../contexts/AuthContext';
 import { plansService, BUDGET_OPTIONS, VIBE_OPTIONS } from '../services/plansService';
+import { notificationService } from '../services/notificationService';
 import { Card, Heading, Subheading, Input, Button, colors } from '../components/ui';
 
 export const PlanScreen = ({ onNavigate }) => {
@@ -119,6 +120,13 @@ export const PlanScreen = ({ onNavigate }) => {
       setBudget('Medium');
       setVibe('Casual');
       setShowAddForm(false);
+
+      try {
+        const myName = user?.user_metadata?.name || 'Your partner';
+        await notificationService.notifyPartnerNewPlan(partnership.partner.id, myName, title.trim());
+      } catch (notifError) {
+        console.log('[PLAN SCREEN] Notification send failed (non-blocking):', notifError?.message || notifError);
+      }
       
       Alert.alert('Plan Created! 📅', `Waiting for ${partnership.partner.name} to confirm.`);
     } catch (err) {
@@ -133,6 +141,14 @@ export const PlanScreen = ({ onNavigate }) => {
     console.log('[PLAN SCREEN] handleConfirm called');
     try {
       await plansService.confirmPlan(plan.id, user.id);
+
+      try {
+        const myName = user?.user_metadata?.name || 'Your partner';
+        await notificationService.notifyPartnerPlanConfirmed(partnership.partner.id, myName, plan.title);
+      } catch (notifError) {
+        console.log('[PLAN SCREEN] Notification send failed (non-blocking):', notifError?.message || notifError);
+      }
+
       Alert.alert('Plan Confirmed! 🎉', 'You both agreed to this plan!');
       loadPlans();
     } catch (err) {

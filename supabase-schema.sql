@@ -20,6 +20,7 @@ CREATE TABLE public.profiles (
   premium_expires TIMESTAMPTZ,
   iap_transaction_id TEXT,
   iap_product_id TEXT,
+  push_token TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -159,11 +160,8 @@ CREATE POLICY "Users can view own codes" ON public.partner_codes
 CREATE POLICY "Users can create own codes" ON public.partner_codes
   FOR INSERT WITH CHECK (auth.uid() = user_id);
 
-CREATE POLICY "Anyone can validate codes" ON public.partner_codes
-  FOR SELECT USING (used_at IS NULL AND expires_at > NOW());
-
-CREATE POLICY "Users can use codes" ON public.partner_codes
-  FOR UPDATE USING (used_at IS NULL AND expires_at > NOW());
+CREATE POLICY "Users can delete own unused codes" ON public.partner_codes
+  FOR DELETE USING (auth.uid() = user_id AND used_at IS NULL);
 
 -- Partnerships policies
 CREATE POLICY "Users can view own partnerships" ON public.partnerships
@@ -253,6 +251,14 @@ CREATE POLICY "Users can update pulse received status" ON public.pulses
     )
   );
 
+CREATE POLICY "Users can delete own pulses" ON public.pulses
+  FOR DELETE USING (
+    auth.uid() = sender_id AND
+    partnership_id IN (
+      SELECT id FROM public.partnerships WHERE auth.uid() IN (user1_id, user2_id)
+    )
+  );
+
 -- =============================================
 -- FUNCTIONS
 -- =============================================
@@ -282,6 +288,46 @@ BEGIN
   RETURN new_code;
 END;
 $$ LANGUAGE plpgsql;
+
+-- Function to validate partner code without exposing all active codes
+CREATE OR REPLACE FUNCTION validate_partner_code(p_code TEXT)
+RETURNS JSON AS $$
+DECLARE
+  v_code_record RECORD;
+BEGIN
+  SELECT
+    pc.id,
+    pc.code,
+    pc.expires_at,
+    pc.user_id,
+    p.name AS partner_name
+  INTO v_code_record
+  FROM public.partner_codes pc
+  JOIN public.profiles p ON p.id = pc.user_id
+  WHERE pc.code = UPPER(p_code)
+    AND pc.used_at IS NULL
+    AND pc.expires_at > NOW();
+
+  IF NOT FOUND THEN
+    RETURN json_build_object('valid', false, 'error', 'Invalid or expired code');
+  END IF;
+
+  IF v_code_record.user_id = auth.uid() THEN
+    RETURN json_build_object('valid', false, 'error', 'Cannot use your own code');
+  END IF;
+
+  RETURN json_build_object(
+    'valid', true,
+    'code', json_build_object(
+      'id', v_code_record.id,
+      'code', v_code_record.code,
+      'expires_at', v_code_record.expires_at,
+      'user_id', v_code_record.user_id,
+      'profiles', json_build_object('name', v_code_record.partner_name)
+    )
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Function to link partners
 CREATE OR REPLACE FUNCTION link_partners(p_code TEXT)

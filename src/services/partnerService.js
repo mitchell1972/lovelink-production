@@ -60,22 +60,57 @@ export const partnerService = {
    * Validate a partner code (check if it exists and is valid)
    */
   async validateCode(code) {
-    const { data, error } = await supabase
-      .from('partner_codes')
-      .select('*, profiles:user_id(name)')
-      .eq('code', code.toUpperCase())
-      .is('used_at', null)
-      .gt('expires_at', new Date().toISOString())
-      .single();
+    const normalized = (code || '').trim().toUpperCase();
+
+    // Fast client-side validation
+    if (!/^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(normalized)) {
+      return { valid: false, error: 'Invalid or expired code' };
+    }
+
+    // Primary path: secure RPC (does not expose all active codes via SELECT policy)
+    const { data, error } = await supabase.rpc('validate_partner_code', {
+      p_code: normalized,
+    });
+
+    if (!error && data) {
+      return data;
+    }
+
+    // Backward-compatible fallback for environments where RPC is not yet deployed.
+    if (error?.code === 'PGRST202' || error?.code === '42883') {
+      const { data: legacyData, error: legacyError } = await supabase
+        .from('partner_codes')
+        .select('*, profiles:user_id(name)')
+        .eq('code', normalized)
+        .is('used_at', null)
+        .gt('expires_at', new Date().toISOString())
+        .single();
+
+      if (legacyError) {
+        if (legacyError.code === 'PGRST116') {
+          return { valid: false, error: 'Invalid or expired code' };
+        }
+        throw legacyError;
+      }
+
+      if (legacyData.user_id) {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (user?.id && legacyData.user_id === user.id) {
+          return { valid: false, error: 'Cannot use your own code' };
+        }
+      }
+
+      return { valid: true, code: legacyData };
+    }
 
     if (error) {
-      if (error.code === 'PGRST116') {
-        return { valid: false, error: 'Invalid or expired code' };
-      }
       throw error;
     }
 
-    return { valid: true, code: data };
+    return { valid: false, error: 'Invalid or expired code' };
   },
 
   /**

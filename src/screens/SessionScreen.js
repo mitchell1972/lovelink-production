@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, Alert, Modal, ScrollView, TouchableOpacity } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
 import { sessionService } from '../services/sessionService';
+import { notificationService } from '../services/notificationService';
 import { Card, Heading, Subheading, Input, Button, colors } from '../components/ui';
 
 // Generate last 30 days
@@ -167,6 +168,14 @@ export const SessionScreen = ({ onNavigate }) => {
       );
       console.log('[SCREEN] Session submitted successfully');
       setSubmitted(true);
+
+      try {
+        const myName = user?.user_metadata?.name || 'Your partner';
+        await notificationService.notifyPartnerSessionComplete(partnership.partner.id, myName);
+      } catch (notifError) {
+        console.log('[SCREEN] Notification send failed (non-blocking):', notifError?.message || notifError);
+      }
+
       Alert.alert('Submitted! 💕', 'Your partner will see your response.');
       await checkPartnerSession(session.type, selectedDate.dateString);
     } catch (err) {

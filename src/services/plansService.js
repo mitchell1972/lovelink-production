@@ -1,11 +1,19 @@
 import { supabase } from '../config/supabase';
 
-export const BUDGET_OPTIONS = ['Free', 'Low', 'Medium', 'High'];
-export const VIBE_OPTIONS = ['Casual', 'Romantic', 'Adventure', 'Relaxed'];
+// Keep in sync with DB check constraints in supabase-schema.sql
+export const BUDGET_OPTIONS = ['Low', 'Medium', 'High'];
+export const VIBE_OPTIONS = ['Casual', 'Romantic', 'Adventurous', 'Relaxing'];
 
 export const plansService = {
   async createPlan(partnershipId, userId, planData) {
     console.log('[PLANS SERVICE] createPlan called');
+
+    const safeBudget = BUDGET_OPTIONS.includes(planData.budget)
+      ? planData.budget
+      : 'Medium';
+    const safeVibe = VIBE_OPTIONS.includes(planData.vibe)
+      ? planData.vibe
+      : 'Casual';
 
     const { data, error } = await supabase
       .from('plans')
@@ -14,8 +22,8 @@ export const plansService = {
         created_by: userId,
         title: planData.title,
         scheduled_date: planData.scheduledDate,
-        budget: planData.budget,
-        vibe: planData.vibe,
+        budget: safeBudget,
+        vibe: safeVibe,
         status: 'draft',
       })
       .select()
@@ -56,7 +64,7 @@ export const plansService = {
       .update({
         status: 'confirmed',
         confirmed_by: userId,
-        confirmed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       })
       .eq('id', planId)
       .select()
@@ -78,8 +86,7 @@ export const plansService = {
       .from('plans')
       .update({
         status: 'rejected',
-        rejected_by: userId,
-        rejected_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       })
       .eq('id', planId)
       .select()
@@ -101,7 +108,7 @@ export const plansService = {
       .from('plans')
       .update({
         status: 'completed',
-        completed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       })
       .eq('id', planId)
       .select()
