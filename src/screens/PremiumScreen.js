@@ -128,7 +128,7 @@ export default function PremiumScreen({ onNavigate }) {
 
         Alert.alert(
           '🎉 Welcome to Premium!',
-          'Thank you for subscribing! All premium features are now unlocked.',
+          'Thank you for subscribing! All premium features are now unlocked for both you and your partner.',
           [{ text: 'Awesome!' }]
         );
       } else if (result.cancelled) {
@@ -260,12 +260,28 @@ export default function PremiumScreen({ onNavigate }) {
         <View style={styles.premiumBanner}>
           <Text style={styles.premiumBannerIcon}>💎</Text>
           <Text style={styles.premiumBannerTitle}>Premium Active</Text>
-          <Text style={styles.premiumBannerPlan}>
-            {premiumStatus.plan === 'yearly' ? 'Yearly Plan' : 'Monthly Plan'}
-          </Text>
-          <Text style={styles.premiumBannerExpiry}>
-            {formatPremiumExpiry(premiumStatus.expires)}
-          </Text>
+          {premiumStatus.source === 'partner' ? (
+            <>
+              <Text style={styles.premiumBannerPlan}>
+                Shared via {premiumStatus.partnerName || "your partner"}'s subscription
+              </Text>
+              <Text style={styles.premiumBannerExpiry}>
+                {premiumStatus.plan === 'yearly' ? 'Yearly Plan' : 'Monthly Plan'} — {formatPremiumExpiry(premiumStatus.expires)}
+              </Text>
+            </>
+          ) : (
+            <>
+              <Text style={styles.premiumBannerPlan}>
+                {premiumStatus.plan === 'yearly' ? 'Yearly Plan' : 'Monthly Plan'}
+              </Text>
+              <Text style={styles.premiumBannerExpiry}>
+                {formatPremiumExpiry(premiumStatus.expires)}
+              </Text>
+              <Text style={styles.sharedNote}>
+                Your partner also has Premium access
+              </Text>
+            </>
+          )}
         </View>
       ) : (
         <View style={styles.freeBanner}>
@@ -286,6 +302,7 @@ export default function PremiumScreen({ onNavigate }) {
       {canPurchase && (
         <View style={styles.subscriptionOptions}>
           <Text style={styles.subscriptionTitle}>Choose Your Plan</Text>
+          <Text style={styles.sharedPlanNote}>One subscription covers both you and your partner</Text>
           
           {/* Monthly Option */}
           <TouchableOpacity
@@ -461,6 +478,21 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   
+  sharedNote: {
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.8)',
+    marginTop: 8,
+    fontStyle: 'italic',
+  },
+
+  sharedPlanNote: {
+    fontSize: 13,
+    color: '#6C63FF',
+    textAlign: 'center',
+    marginBottom: 12,
+    fontWeight: '500',
+  },
+
   freeBanner: {
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
     borderRadius: 16,

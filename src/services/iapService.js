@@ -305,7 +305,8 @@ class IAPService {
   }
 
   /**
-   * Save purchase to Supabase for server-side tracking
+   * Save purchase to Supabase for server-side tracking.
+   * Also syncs premium to the linked partner so both get instant access.
    */
   async savePurchaseToDatabase(userId, purchase, plan) {
     try {
@@ -318,22 +319,38 @@ class IAPService {
         expiresAt = new Date(now.setMonth(now.getMonth() + 1));
       }
 
-      // Update user's premium status in database
+      const premiumFields = {
+        is_premium: true,
+        premium_plan: plan,
+        premium_since: new Date().toISOString(),
+        premium_expires: expiresAt.toISOString(),
+        iap_transaction_id: purchase.transactionId,
+        iap_product_id: purchase.productId,
+      };
+
+      // Update subscriber's premium status
       const { data, error } = await supabase
         .from('profiles')
-        .update({
-          is_premium: true,
-          premium_plan: plan,
-          premium_since: new Date().toISOString(),
-          premium_expires: expiresAt.toISOString(),
-          iap_transaction_id: purchase.transactionId,
-          iap_product_id: purchase.productId,
-        })
+        .update(premiumFields)
         .eq('id', userId)
-        .select()
+        .select('*, partner_id')
         .single();
 
       if (error) throw error;
+
+      // Sync premium to partner (convenience — getPremiumStatus handles correctness)
+      if (data.partner_id) {
+        await supabase
+          .from('profiles')
+          .update({
+            is_premium: true,
+            premium_plan: plan,
+            premium_since: premiumFields.premium_since,
+            premium_expires: premiumFields.premium_expires,
+            premium_granted_by: userId,
+          })
+          .eq('id', data.partner_id);
+      }
 
       return { success: true, data };
     } catch (error) {

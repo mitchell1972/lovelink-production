@@ -20,6 +20,7 @@ CREATE TABLE public.profiles (
   premium_expires TIMESTAMPTZ,
   iap_transaction_id TEXT,
   iap_product_id TEXT,
+  premium_granted_by UUID REFERENCES public.profiles(id),
   push_token TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()

@@ -62,31 +62,62 @@ export const PREMIUM_FEATURES = [
 ];
 
 /**
- * Get current user's premium status
+ * Check if premium fields represent a valid (non-expired) subscription
+ */
+const isPremiumValid = (profile) =>
+  profile.is_premium &&
+  (!profile.premium_expires || new Date(profile.premium_expires) > new Date());
+
+/**
+ * Get current user's premium status.
+ * One subscription covers both partners — if the user's partner is premium,
+ * the user is treated as premium too.
  */
 export const getPremiumStatus = async (userId) => {
   try {
     const { data, error } = await supabase
       .from('profiles')
-      .select('is_premium, premium_since, premium_expires, premium_plan')
+      .select('is_premium, premium_since, premium_expires, premium_plan, partner_id')
       .eq('id', userId)
       .single();
 
     if (error) throw error;
 
-    // Check if premium is still valid (not expired)
-    const isValid = data.is_premium && 
-      (!data.premium_expires || new Date(data.premium_expires) > new Date());
+    // Check user's own premium status first
+    if (isPremiumValid(data)) {
+      return {
+        isPremium: true,
+        source: 'self',
+        plan: data.premium_plan,
+        since: data.premium_since,
+        expires: data.premium_expires,
+      };
+    }
 
-    return {
-      isPremium: isValid,
-      plan: data.premium_plan,
-      since: data.premium_since,
-      expires: data.premium_expires,
-    };
+    // If not premium, check partner's premium status
+    if (data.partner_id) {
+      const { data: partner, error: partnerError } = await supabase
+        .from('profiles')
+        .select('is_premium, premium_since, premium_expires, premium_plan, name')
+        .eq('id', data.partner_id)
+        .single();
+
+      if (!partnerError && partner && isPremiumValid(partner)) {
+        return {
+          isPremium: true,
+          source: 'partner',
+          partnerName: partner.name,
+          plan: partner.premium_plan,
+          since: partner.premium_since,
+          expires: partner.premium_expires,
+        };
+      }
+    }
+
+    return { isPremium: false, source: null, plan: null, since: null, expires: null };
   } catch (error) {
     console.error('Error getting premium status:', error);
-    return { isPremium: false, plan: null, since: null, expires: null };
+    return { isPremium: false, source: null, plan: null, since: null, expires: null };
   }
 };
 
