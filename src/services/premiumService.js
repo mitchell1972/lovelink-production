@@ -69,6 +69,27 @@ const isPremiumValid = (profile) =>
   (!profile.premium_expires || new Date(profile.premium_expires) > new Date());
 
 /**
+ * Resolve partner id from active partnerships when profile.partner_id is absent.
+ */
+const getPartnerIdFromActivePartnership = async (userId) => {
+  const { data: partnerships, error } = await supabase
+    .from('partnerships')
+    .select('user1_id, user2_id')
+    .or(`user1_id.eq.${userId},user2_id.eq.${userId}`)
+    .eq('status', 'active')
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  if (error) throw error;
+
+  const rows = Array.isArray(partnerships) ? partnerships : (partnerships ? [partnerships] : []);
+  const latest = rows[0];
+
+  if (!latest) return null;
+  return latest.user1_id === userId ? latest.user2_id : latest.user1_id;
+};
+
+/**
  * Get current user's premium status.
  * One subscription covers both partners — if the user's partner is premium,
  * the user is treated as premium too.
@@ -94,12 +115,14 @@ export const getPremiumStatus = async (userId) => {
       };
     }
 
-    // If not premium, check partner's premium status
-    if (data.partner_id) {
+    // If not premium, check partner's premium status.
+    // We first try profile.partner_id, then fall back to active partnerships.
+    const partnerId = data.partner_id || await getPartnerIdFromActivePartnership(userId);
+    if (partnerId) {
       const { data: partner, error: partnerError } = await supabase
         .from('profiles')
         .select('is_premium, premium_since, premium_expires, premium_plan, name')
-        .eq('id', data.partner_id)
+        .eq('id', partnerId)
         .single();
 
       if (!partnerError && partner && isPremiumValid(partner)) {
@@ -140,25 +163,32 @@ export const checkFeatureAccess = async (userId, featureName) => {
 /**
  * Check moments limit
  */
-export const checkMomentsLimit = async (userId) => {
+export const checkMomentsLimit = async (userId, partnershipId = null) => {
   try {
     const limits = await getFeatureLimits(userId);
-    
-    // Get current moments count
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('partner_id')
-      .eq('id', userId)
-      .single();
 
-    if (!profile?.partner_id) {
+    let activePartnershipId = partnershipId;
+    if (!activePartnershipId) {
+      const { data: partnerships, error: partnershipError } = await supabase
+        .from('partnerships')
+        .select('id')
+        .or(`user1_id.eq.${userId},user2_id.eq.${userId}`)
+        .eq('status', 'active')
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (partnershipError) throw partnershipError;
+      activePartnershipId = partnerships?.[0]?.id || null;
+    }
+
+    if (!activePartnershipId) {
       return { allowed: true, current: 0, limit: limits.momentsLimit };
     }
 
     const { count } = await supabase
       .from('moments')
       .select('*', { count: 'exact', head: true })
-      .or(`user_id.eq.${userId},user_id.eq.${profile.partner_id}`);
+      .eq('partnership_id', activePartnershipId);
 
     const currentCount = count || 0;
     const canAdd = limits.momentsLimit === Infinity || currentCount < limits.momentsLimit;

@@ -45,7 +45,7 @@ export default function MomentsScreen({ onNavigate }) {
     try {
       const status = await getPremiumStatus(user.id);
       setIsPremium(status.isPremium);
-      const limits = await checkMomentsLimit(user.id);
+      const limits = await checkMomentsLimit(user.id, partnership?.id || null);
       setLimitInfo(limits);
     } catch (error) {
       console.error('Error checking premium:', error);
@@ -82,7 +82,7 @@ export default function MomentsScreen({ onNavigate }) {
   const handleAddMoment = async () => {
     // Check limits first
     try {
-      const limits = await checkMomentsLimit(user.id);
+      const limits = await checkMomentsLimit(user.id, partnership?.id || null);
       
       if (!limits.allowed) {
         Alert.alert(

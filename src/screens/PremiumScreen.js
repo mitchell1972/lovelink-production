@@ -39,6 +39,16 @@ const getPlanTypeForProductId = (productId) => {
   return productId?.toLowerCase().includes('year') ? 'yearly' : 'monthly';
 };
 
+const LEGACY_PRODUCT_IDS = [
+  'com.lovelink.premium.monthly',
+  'com.lovelink.premium.yearly',
+  'lovelink.premium.monthly',
+];
+const isKnownSubscriptionProduct = (productId) =>
+  productId === PRODUCT_IDS.MONTHLY ||
+  productId === PRODUCT_IDS.YEARLY ||
+  LEGACY_PRODUCT_IDS.includes(productId);
+
 export default function PremiumScreen({ onNavigate }) {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
@@ -159,9 +169,7 @@ export default function PremiumScreen({ onNavigate }) {
 
       if (purchases && purchases.length > 0) {
         // Find the most recent subscription
-        const subscription = purchases.find(p => 
-          p.productId === PRODUCT_IDS.MONTHLY || p.productId === PRODUCT_IDS.YEARLY
-        );
+        const subscription = purchases.find(p => isKnownSubscriptionProduct(p.productId));
 
         if (subscription) {
           const plan = subscription.productId === PRODUCT_IDS.YEARLY ? 'yearly' : 'monthly';

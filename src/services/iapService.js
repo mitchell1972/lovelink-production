@@ -7,8 +7,8 @@ import { supabase } from '../config/supabase';
 
 // Product IDs - MUST match App Store Connect exactly
 export const PRODUCT_IDS = {
-  MONTHLY: 'com.lovelink.premium.monthly',
-  YEARLY: 'com.lovelink.premium.yearly',
+  MONTHLY: 'com.lovelinkcouples.premium.monthly',
+  YEARLY: 'com.lovelinkcouples.premium.yearly',
 };
 
 // All subscription product IDs
@@ -19,6 +19,43 @@ const subscriptionSkus = Platform.select({
 
 // Normalize to an array (Platform.select can return undefined in edge cases)
 const subscriptionSkusList = Array.isArray(subscriptionSkus) ? subscriptionSkus : [];
+const legacySubscriptionSkus = [
+  'com.lovelink.premium.monthly',
+  'com.lovelink.premium.yearly',
+  'lovelink.premium.monthly',
+];
+const rpcMissingFunctionCodes = new Set(['PGRST202', '42883']);
+const validPlans = new Set(['monthly', 'yearly']);
+
+const isSupportedSubscriptionProductId = (productId) =>
+  typeof productId === 'string' &&
+  (subscriptionSkusList.includes(productId) || legacySubscriptionSkus.includes(productId));
+
+const calculatePremiumExpiry = (plan) => {
+  const now = new Date();
+  if (plan === 'yearly') {
+    return new Date(now.setFullYear(now.getFullYear() + 1));
+  }
+  return new Date(now.setMonth(now.getMonth() + 1));
+};
+
+const getPartnerIdFromActivePartnership = async (userId) => {
+  const { data: partnerships, error } = await supabase
+    .from('partnerships')
+    .select('user1_id, user2_id')
+    .or(`user1_id.eq.${userId},user2_id.eq.${userId}`)
+    .eq('status', 'active')
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  if (error) throw error;
+
+  const rows = Array.isArray(partnerships) ? partnerships : (partnerships ? [partnerships] : []);
+  const latest = rows[0];
+  if (!latest) return null;
+
+  return latest.user1_id === userId ? latest.user2_id : latest.user1_id;
+};
 
 class IAPService {
   constructor() {
@@ -100,6 +137,10 @@ class IAPService {
    */
   async purchaseSubscription(productId) {
     try {
+      if (!isSupportedSubscriptionProductId(productId)) {
+        return { success: false, error: 'Invalid subscription product selected.' };
+      }
+
       // ALWAYS ensure initialized
       const initialized = await this.initialize();
       if (!initialized) {
@@ -286,7 +327,7 @@ class IAPService {
 
       // Check for valid subscription
       for (const purchase of purchases) {
-        if (subscriptionSkusList.includes(purchase.productId)) {
+        if (isSupportedSubscriptionProductId(purchase.productId)) {
           return {
             isActive: true,
             productId: purchase.productId,
@@ -309,36 +350,82 @@ class IAPService {
    */
   async savePurchaseToDatabase(userId, purchase, plan) {
     try {
-      // Calculate expiry date
-      const now = new Date();
-      let expiresAt;
-      if (plan === 'yearly') {
-        expiresAt = new Date(now.setFullYear(now.getFullYear() + 1));
-      } else {
-        expiresAt = new Date(now.setMonth(now.getMonth() + 1));
+      if (!userId) {
+        return { success: false, error: 'Missing user id' };
       }
+
+      if (!purchase?.productId) {
+        return { success: false, error: 'Missing purchase product id' };
+      }
+
+      if (!isSupportedSubscriptionProductId(purchase.productId)) {
+        return { success: false, error: 'Unsupported subscription product id' };
+      }
+
+      if (!validPlans.has(plan)) {
+        return { success: false, error: 'Invalid premium plan' };
+      }
+
+      const premiumSince = new Date().toISOString();
+      const premiumExpires = calculatePremiumExpiry(plan).toISOString();
 
       const premiumFields = {
         is_premium: true,
         premium_plan: plan,
-        premium_since: new Date().toISOString(),
-        premium_expires: expiresAt.toISOString(),
+        premium_since: premiumSince,
+        premium_expires: premiumExpires,
         iap_transaction_id: purchase.transactionId,
         iap_product_id: purchase.productId,
       };
+
+      // Preferred path: write premium via a server-side RPC.
+      // If the RPC is not deployed yet, fall back to the legacy client update path.
+      const { data: rpcData, error: rpcError } = await supabase.rpc('grant_premium_from_iap', {
+        p_user_id: userId,
+        p_product_id: purchase.productId,
+        p_transaction_id: purchase.transactionId || null,
+        p_plan: plan,
+        p_premium_since: premiumSince,
+        p_premium_expires: premiumExpires,
+      });
+
+      if (!rpcError) {
+        if (rpcData && typeof rpcData === 'object' && rpcData.success === false) {
+          return { success: false, error: rpcData.error || 'Failed to save purchase' };
+        }
+        return { success: true, data: rpcData };
+      }
+
+      if (!rpcMissingFunctionCodes.has(rpcError.code)) {
+        throw rpcError;
+      }
+
+      const { data: currentProfile, error: currentProfileError } = await supabase
+        .from('profiles')
+        .select('id, partner_id, iap_transaction_id')
+        .eq('id', userId)
+        .single();
+
+      if (currentProfileError) throw currentProfileError;
+
+      if (purchase.transactionId && currentProfile.iap_transaction_id === purchase.transactionId) {
+        return { success: true, data: currentProfile };
+      }
+
+      const partnerId = currentProfile.partner_id || await getPartnerIdFromActivePartnership(userId);
 
       // Update subscriber's premium status
       const { data, error } = await supabase
         .from('profiles')
         .update(premiumFields)
         .eq('id', userId)
-        .select('*, partner_id')
+        .select('id, partner_id, premium_plan, premium_since, premium_expires, iap_transaction_id, iap_product_id')
         .single();
 
       if (error) throw error;
 
       // Sync premium to partner (convenience — getPremiumStatus handles correctness)
-      if (data.partner_id) {
+      if (partnerId) {
         await supabase
           .from('profiles')
           .update({
@@ -348,7 +435,7 @@ class IAPService {
             premium_expires: premiumFields.premium_expires,
             premium_granted_by: userId,
           })
-          .eq('id', data.partner_id);
+          .eq('id', partnerId);
       }
 
       return { success: true, data };
