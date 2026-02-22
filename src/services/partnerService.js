@@ -117,11 +117,91 @@ export const partnerService = {
    * Link with a partner using their code
    */
   async linkWithPartner(code) {
-    const { data, error } = await supabase
-      .rpc('link_partners', { p_code: code.toUpperCase() });
+    const normalizedCode = (code || '').trim().toUpperCase();
 
-    if (error) throw error;
-    return data;
+    const { data, error } = await supabase.rpc('link_partners', {
+      p_code: normalizedCode,
+    });
+
+    if (!error) return data;
+
+    // Some DB deployments still throw a raw unique constraint error when the
+    // couple is already linked. Recover gracefully instead of hard-failing.
+    const message = (error.message || '').toLowerCase();
+    const isDuplicatePartnership =
+      error.code === '23505' ||
+      message.includes('unique_partnership') ||
+      message.includes('duplicate key value');
+
+    if (!isDuplicatePartnership) {
+      throw error;
+    }
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const currentUserId = user?.id;
+
+    if (!currentUserId) {
+      return {
+        success: false,
+        error: 'Unable to verify existing partnership. Please sign in again.',
+      };
+    }
+
+    let partnerUserId = null;
+    try {
+      const validation = await this.validateCode(normalizedCode);
+      if (validation?.valid) {
+        partnerUserId = validation.code?.user_id || null;
+      }
+    } catch {
+      // Ignore validation failures here; we can still look for an active
+      // partnership for the current user.
+    }
+
+    const { data: rows, error: lookupError } = await supabase
+      .from('partnerships')
+      .select('id, status, user1_id, user2_id')
+      .or(`user1_id.eq.${currentUserId},user2_id.eq.${currentUserId}`)
+      .order('created_at', { ascending: false });
+
+    if (lookupError) {
+      throw error;
+    }
+
+    const allRows = Array.isArray(rows) ? rows : [];
+    const matchingRows = partnerUserId
+      ? allRows.filter(
+          (row) => row.user1_id === partnerUserId || row.user2_id === partnerUserId
+        )
+      : allRows;
+
+    const activePartnership = matchingRows.find((row) => row.status === 'active');
+    if (activePartnership) {
+      const resolvedPartnerId =
+        partnerUserId ||
+        (activePartnership.user1_id === currentUserId
+          ? activePartnership.user2_id
+          : activePartnership.user1_id);
+
+      return {
+        success: true,
+        partnership_id: activePartnership.id,
+        partner_id: resolvedPartnerId,
+        already_linked: true,
+      };
+    }
+
+    if (matchingRows.length > 0) {
+      return {
+        success: false,
+        error:
+          'A previous partnership record already exists for this couple. Please contact support to reactivate it.',
+      };
+    }
+
+    throw error;
   },
 
   /**

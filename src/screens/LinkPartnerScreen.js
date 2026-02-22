@@ -63,7 +63,12 @@ export const LinkPartnerScreen = () => {
       const result = await partnerService.linkWithPartner(partnerCode.trim());
 
       if (result.success) {
-        Alert.alert('Connected! 💕', 'You and your partner are now linked!');
+        Alert.alert(
+          result.already_linked ? 'Already Connected 💕' : 'Connected! 💕',
+          result.already_linked
+            ? 'You are already linked with this partner.'
+            : 'You and your partner are now linked!'
+        );
         await refreshPartnership();
       } else {
         Alert.alert('Error', result.error || 'Failed to link with partner');
