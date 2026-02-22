@@ -5,11 +5,10 @@ import { Platform } from 'react-native';
 import * as RNIap from 'react-native-iap';
 import { supabase } from '../config/supabase';
 
-// Product IDs - matching App Store Connect
-// NOTE: The yearly product was created with ID ending in "monthly" by mistake
+// Product IDs - MUST match App Store Connect exactly
 export const PRODUCT_IDS = {
-  MONTHLY: 'lovelink.premium.monthly',
-  YEARLY: 'com.lovelink.premium.monthly',  // This is actually the yearly product in ASC
+  MONTHLY: 'com.lovelink.premium.monthly',
+  YEARLY: 'com.lovelink.premium.yearly',
 };
 
 // All subscription product IDs

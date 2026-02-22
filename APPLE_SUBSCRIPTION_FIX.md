@@ -28,7 +28,7 @@ Click on "Premium Yearly" and complete:
 **Subscription Information Tab:**
 - [ ] **Display Name**: "Premium Yearly" (what users see)
 - [ ] **Description**: "Unlock all premium features for 1 year"
-- [ ] Verify Product ID: `com.lovelink.premium.monthly`
+- [ ] Verify Product ID: `com.lovelink.premium.yearly`
 - [ ] Verify Duration: `1 year`
 
 **Subscription Pricing Tab:**
@@ -53,7 +53,7 @@ Click on "Premium Monthly" and complete same as above:
 **Subscription Information:**
 - [ ] Display Name: "Premium Monthly"
 - [ ] Description: "Unlock all premium features for 1 month"
-- [ ] Verify Product ID: `lovelink.premium.monthly`
+- [ ] Verify Product ID: `com.lovelink.premium.monthly`
 - [ ] Verify Duration: `1 month`
 
 **Subscription Pricing:**

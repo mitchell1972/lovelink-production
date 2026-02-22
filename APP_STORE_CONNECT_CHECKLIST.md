@@ -13,18 +13,18 @@
 - [ ] **CRITICAL**: Assign the Reference Name (this creates the group ID internally)
 
 #### 2. Add Subscriptions to the Group
-For EACH subscription (`lovelink.premium.monthly` and `com.lovelink.premium.monthly`):
+For EACH subscription (`com.lovelink.premium.monthly` and `com.lovelink.premium.yearly`):
 
 - [ ] Click the subscription group you just created
 - [ ] Click "+" to add a subscription
-- [ ] Enter Product ID: `lovelink.premium.monthly` (for monthly)
+- [ ] Enter Product ID: `com.lovelink.premium.monthly` (for monthly)
 - [ ] **Subscription Duration**: Select "1 Month" (CRITICAL - must match product type)
 - [ ] **Display Name**: Enter "Monthly Premium" (required)
 - [ ] **Description**: Add a description (required)
 - [ ] Click "Create"
 
 - [ ] Repeat for yearly subscription:
-  - Product ID: `com.lovelink.premium.monthly`
+  - Product ID: `com.lovelink.premium.yearly`
   - **Subscription Duration**: Select "1 Year" (CRITICAL!)
   - Display Name: "Yearly Premium"
   - Description: Add description
