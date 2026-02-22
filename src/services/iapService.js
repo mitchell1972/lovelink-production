@@ -31,6 +31,22 @@ const isSupportedSubscriptionProductId = (productId) =>
   typeof productId === 'string' &&
   (subscriptionSkusList.includes(productId) || legacySubscriptionSkus.includes(productId));
 
+const isMissingPurchaseRequestConfigError = (error) => {
+  const code = error?.code;
+  const message = (error?.message || '').toLowerCase();
+  return (
+    code === 'E_MISSING_PURCHASE_REQUEST' ||
+    message.includes('missing purchase request configuration')
+  );
+};
+
+const normalizePurchaseResult = (result) => {
+  if (Array.isArray(result)) {
+    return result.find(Boolean) || null;
+  }
+  return result || null;
+};
+
 const calculatePremiumExpiry = (plan) => {
   const now = new Date();
   if (plan === 'yearly') {
@@ -174,78 +190,80 @@ class IAPService {
         console.log('Product details:', JSON.stringify(product, null, 2));
       }
 
-      let purchase;
+      let purchaseResult;
 
-      // iOS-specific purchase flow
+      if (typeof RNIap.requestPurchase !== 'function') {
+        throw new Error('No purchase method available in react-native-iap');
+      }
+
+      // react-native-iap v14+ requires requestPurchase({ request: ..., type: 'subs' }).
+      // Keep legacy fallback calls for older installed native binaries.
       if (Platform.OS === 'ios') {
         console.log('Platform: iOS');
-        
-        // Try requestSubscription first (the correct method for subscriptions)
-        if (typeof RNIap.requestSubscription === 'function') {
-          console.log('Calling RNIap.requestSubscription with sku:', productId);
-          
-          try {
-            // For iOS StoreKit 2, just pass the sku
-            purchase = await RNIap.requestSubscription({
-              sku: productId,
-            });
-            console.log('requestSubscription returned:', JSON.stringify(purchase, null, 2));
-          } catch (subError) {
-            console.error('requestSubscription error:', subError);
-            console.error('Error code:', subError.code);
-            console.error('Error message:', subError.message);
-            
-            // If requestSubscription fails, try requestPurchase as fallback
-            if (subError.message?.includes('Missing purchase') || subError.code === 'E_MISSING_PURCHASE_REQUEST') {
-              console.log('Trying requestPurchase as fallback...');
-              
-              if (typeof RNIap.requestPurchase === 'function') {
-                purchase = await RNIap.requestPurchase({
-                  sku: productId,
-                });
-                console.log('requestPurchase fallback returned:', JSON.stringify(purchase, null, 2));
-              } else {
-                throw subError;
-              }
-            } else {
-              throw subError;
-            }
+        const modernRequest = {
+          request: {
+            apple: { sku: productId },
+          },
+          type: 'subs',
+        };
+
+        try {
+          purchaseResult = await RNIap.requestPurchase(modernRequest);
+          console.log('requestPurchase (modern iOS payload) returned:', JSON.stringify(purchaseResult, null, 2));
+        } catch (modernError) {
+          console.error('requestPurchase modern payload error:', modernError);
+          console.error('Error code:', modernError?.code);
+          console.error('Error message:', modernError?.message);
+
+          if (!isMissingPurchaseRequestConfigError(modernError)) {
+            throw modernError;
           }
-        } else if (typeof RNIap.requestPurchase === 'function') {
-          console.log('requestSubscription not available, using requestPurchase');
-          purchase = await RNIap.requestPurchase({
-            sku: productId,
-          });
-          console.log('requestPurchase returned:', JSON.stringify(purchase, null, 2));
-        } else {
-          throw new Error('No purchase method available in react-native-iap');
+
+          // Legacy fallback (older react-native-iap).
+          purchaseResult = await RNIap.requestPurchase({ sku: productId });
+          console.log('requestPurchase (legacy iOS payload) returned:', JSON.stringify(purchaseResult, null, 2));
         }
       } else {
-        // Android
         console.log('Platform: Android');
-        if (typeof RNIap.requestSubscription === 'function') {
-          // Android needs subscriptionOffers
-          const offerToken = product?.subscriptionOfferDetails?.[0]?.offerToken || '';
-          if (!offerToken) {
-            // Without offer tokens, Android subscription purchases cannot proceed.
-            return {
-              success: false,
-              error:
-                'Subscription offer details are missing for this product on Android. ' +
-                'Check Google Play Console subscription base plans/offers setup and ensure products load.'
-            };
+        const offerToken = product?.subscriptionOfferDetails?.[0]?.offerToken || '';
+        const modernRequest = {
+          request: {
+            google: {
+              skus: [productId],
+              ...(offerToken
+                ? {
+                    subscriptionOffers: [
+                      {
+                        sku: productId,
+                        offerToken,
+                      },
+                    ],
+                  }
+                : {}),
+            },
+          },
+          type: 'subs',
+        };
+
+        try {
+          purchaseResult = await RNIap.requestPurchase(modernRequest);
+          console.log('requestPurchase (modern Android payload) returned:', JSON.stringify(purchaseResult, null, 2));
+        } catch (modernError) {
+          console.error('requestPurchase modern payload error:', modernError);
+          console.error('Error code:', modernError?.code);
+          console.error('Error message:', modernError?.message);
+
+          if (!isMissingPurchaseRequestConfigError(modernError)) {
+            throw modernError;
           }
-          purchase = await RNIap.requestSubscription({
-            sku: productId,
-            subscriptionOffers: [{
-              sku: productId,
-              offerToken,
-            }],
-          });
-        } else {
-          purchase = await RNIap.requestPurchase({ sku: productId });
+
+          // Legacy fallback (older react-native-iap).
+          purchaseResult = await RNIap.requestPurchase({ sku: productId });
+          console.log('requestPurchase (legacy Android payload) returned:', JSON.stringify(purchaseResult, null, 2));
         }
       }
+
+      const purchase = normalizePurchaseResult(purchaseResult);
 
       console.log('=== PURCHASE RESULT ===');
       console.log('Purchase object:', JSON.stringify(purchase, null, 2));
