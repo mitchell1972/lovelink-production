@@ -21,6 +21,7 @@ CREATE TABLE public.profiles (
   iap_transaction_id TEXT,
   iap_product_id TEXT,
   premium_granted_by UUID REFERENCES public.profiles(id),
+  trial_access_bypass BOOLEAN DEFAULT FALSE,
   push_token TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -433,6 +434,59 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
+-- Function to delete the currently authenticated user's account and data
+CREATE OR REPLACE FUNCTION public.delete_user_account()
+RETURNS void AS $$
+DECLARE
+  v_user_id UUID := auth.uid();
+BEGIN
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated';
+  END IF;
+
+  -- Clear non-cascading references before removing the auth user.
+  UPDATE public.profiles
+  SET
+    partner_id = NULL,
+    premium_granted_by = NULL,
+    updated_at = NOW()
+  WHERE partner_id = v_user_id
+     OR premium_granted_by = v_user_id;
+
+  UPDATE public.partner_codes
+  SET used_by = NULL
+  WHERE used_by = v_user_id;
+
+  UPDATE public.plans
+  SET confirmed_by = NULL
+  WHERE confirmed_by = v_user_id;
+
+  -- Deleting auth.users cascades to public.profiles (and dependent rows).
+  DELETE FROM auth.users
+  WHERE id = v_user_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Account not found';
+  END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+REVOKE ALL ON FUNCTION public.delete_user_account() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.delete_user_account() TO authenticated;
+
+-- Trigger function to prevent clients from self-enabling trial bypass.
+CREATE OR REPLACE FUNCTION public.prevent_trial_access_bypass_self_update()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.trial_access_bypass IS DISTINCT FROM OLD.trial_access_bypass
+     AND COALESCE(auth.role(), 'service_role') <> 'service_role' THEN
+    RAISE EXCEPTION 'Not allowed to modify trial_access_bypass';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Function to handle new user signup
 CREATE OR REPLACE FUNCTION handle_new_user()
 RETURNS TRIGGER AS $$
@@ -451,6 +505,10 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 CREATE OR REPLACE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION handle_new_user();
+
+CREATE OR REPLACE TRIGGER trg_prevent_trial_access_bypass_self_update
+  BEFORE UPDATE ON public.profiles
+  FOR EACH ROW EXECUTE FUNCTION public.prevent_trial_access_bypass_self_update();
 
 -- =============================================
 -- REALTIME SUBSCRIPTIONS

@@ -3,6 +3,10 @@
 
 import { supabase } from '../config/supabase';
 
+export const TRIAL_DAYS = 7;
+export const TRIAL_GATED_FEATURES = ['session', 'moments', 'pulse', 'plan'];
+export const TRIAL_BYPASS_COLUMN = 'trial_access_bypass';
+
 // Feature limits for free vs premium users
 export const FEATURE_LIMITS = {
   free: {
@@ -60,6 +64,9 @@ export const PREMIUM_FEATURES = [
     premiumValue: '5+ patterns',
   },
 ];
+
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+const MISSING_COLUMN_ERROR_CODES = new Set(['42703', 'PGRST204']);
 
 /**
  * Check if premium fields represent a valid (non-expired) subscription
@@ -141,6 +148,91 @@ export const getPremiumStatus = async (userId) => {
   } catch (error) {
     console.error('Error getting premium status:', error);
     return { isPremium: false, source: null, plan: null, since: null, expires: null };
+  }
+};
+
+/**
+ * Determine whether the user can access trial-gated core features.
+ * Access is granted when:
+ * - user has active premium (self or partner), or
+ * - user account age is within 7-day trial window.
+ */
+export const getTrialAccessStatus = async (userId) => {
+  try {
+    const premiumStatus = await getPremiumStatus(userId);
+
+    if (premiumStatus.isPremium) {
+      return {
+        hasAccess: true,
+        isPremium: true,
+        isInTrial: false,
+        daysRemaining: null,
+        trialEndsAt: null,
+        reason: 'premium',
+      };
+    }
+
+    let profileRow = null;
+    let profileError = null;
+
+    // Preferred path: include explicit trial bypass flag.
+    const { data, error } = await supabase
+      .from('profiles')
+      .select(`created_at, ${TRIAL_BYPASS_COLUMN}`)
+      .eq('id', userId)
+      .single();
+
+    profileRow = data;
+    profileError = error;
+
+    // Backward compatibility for environments without the bypass column yet.
+    if (MISSING_COLUMN_ERROR_CODES.has(profileError?.code)) {
+      const fallbackResult = await supabase
+        .from('profiles')
+        .select('created_at')
+        .eq('id', userId)
+        .single();
+      profileRow = fallbackResult.data;
+      profileError = fallbackResult.error;
+    }
+
+    if (profileError) throw profileError;
+
+    if (profileRow?.[TRIAL_BYPASS_COLUMN]) {
+      return {
+        hasAccess: true,
+        isPremium: false,
+        isInTrial: false,
+        daysRemaining: null,
+        trialEndsAt: null,
+        reason: 'bypass',
+      };
+    }
+
+    const createdAt = profileRow?.created_at ? new Date(profileRow.created_at) : new Date();
+    const trialEndsAt = new Date(createdAt.getTime() + (TRIAL_DAYS * ONE_DAY_MS));
+    const now = new Date();
+    const msRemaining = trialEndsAt.getTime() - now.getTime();
+    const isInTrial = msRemaining > 0;
+
+    return {
+      hasAccess: isInTrial,
+      isPremium: false,
+      isInTrial,
+      daysRemaining: isInTrial ? Math.ceil(msRemaining / ONE_DAY_MS) : 0,
+      trialEndsAt: trialEndsAt.toISOString(),
+      reason: isInTrial ? 'trial' : 'expired',
+    };
+  } catch (error) {
+    console.error('Error getting trial access status:', error);
+    return {
+      hasAccess: false,
+      isPremium: false,
+      isInTrial: false,
+      daysRemaining: 0,
+      trialEndsAt: null,
+      reason: 'error',
+    };
   }
 };
 
@@ -236,11 +328,15 @@ export const formatPremiumExpiry = (expiresDate) => {
 
 export default {
   getPremiumStatus,
+  getTrialAccessStatus,
   getFeatureLimits,
   checkFeatureAccess,
   checkMomentsLimit,
   getAvailablePulsePatterns,
   formatPremiumExpiry,
+  TRIAL_DAYS,
+  TRIAL_GATED_FEATURES,
+  TRIAL_BYPASS_COLUMN,
   FEATURE_LIMITS,
   PREMIUM_FEATURES,
 };

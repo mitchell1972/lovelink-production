@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, ScrollView, StyleSheet, StatusBar, Text } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, ScrollView, StyleSheet, StatusBar, Text, Alert } from 'react-native';
 import { AuthProvider, useAuth } from './src/contexts/AuthContext';
 import {
   GradientBackground,
@@ -20,6 +20,7 @@ import {
   SettingsScreen,
 } from './src/screens';
 import { isSupabaseConfigured } from './src/config/supabase';
+import { getTrialAccessStatus, TRIAL_GATED_FEATURES } from './src/services/premiumService';
 
 // Screens that handle their own scrolling (have FlatList or ScrollView)
 const SELF_SCROLLING_SCREENS = ['moments', 'home', 'pulse', 'premium', 'settings', 'session', 'plan'];
@@ -29,6 +30,32 @@ const AppContent = () => {
   const { user, partnership, loading, isAuthenticated, isPaired } = useAuth();
   const [authScreen, setAuthScreen] = useState('signup');
   const [currentScreen, setCurrentScreen] = useState('home');
+
+  useEffect(() => {
+    let isActive = true;
+
+    const enforceTrialGate = async () => {
+      if (!user?.id || !isPaired) return;
+      if (!TRIAL_GATED_FEATURES.includes(currentScreen)) return;
+
+      const status = await getTrialAccessStatus(user.id);
+      if (!isActive) return;
+
+      if (!status.hasAccess) {
+        Alert.alert(
+          'Subscription Required',
+          'Your 7-day free trial has ended. Subscribe to keep using Daily Session, Moments, Pulse, and Plans.',
+          [{ text: 'OK', onPress: () => setCurrentScreen('premium') }]
+        );
+      }
+    };
+
+    enforceTrialGate();
+
+    return () => {
+      isActive = false;
+    };
+  }, [currentScreen, user?.id, isPaired]);
 
   if (loading) {
     return <LoadingScreen message="Loading LoveLink..." />;

@@ -6,7 +6,28 @@ jest.mock('../../config/supabase', () => ({
   supabase: mockSupabase,
 }));
 
-const { checkMomentsLimit, formatPremiumExpiry, getPremiumStatus } = require('../premiumService');
+const {
+  checkMomentsLimit,
+  formatPremiumExpiry,
+  getPremiumStatus,
+  getTrialAccessStatus,
+  TRIAL_DAYS,
+} = require('../premiumService');
+
+const buildNonPremiumProfile = (overrides = {}) => ({
+  is_premium: false,
+  premium_since: null,
+  premium_expires: null,
+  premium_plan: null,
+  partner_id: null,
+  ...overrides,
+});
+
+const buildTrialProfile = (overrides = {}) => ({
+  created_at: '2026-02-27T00:00:00.000Z',
+  trial_access_bypass: false,
+  ...overrides,
+});
 
 const setupSupabase = ({
   userId = 'user-1',
@@ -15,28 +36,56 @@ const setupSupabase = ({
   partnerProfile = null,
   partnershipRows = [],
   momentsCount = 0,
+  trialProfile,
+  failTrialSelectWithMissingColumn = false,
+  trialProfileError = null,
 }) => {
-  const effectiveUserProfile = userProfile || {
-    is_premium: false,
-    premium_since: null,
-    premium_expires: null,
-    premium_plan: null,
-    partner_id: null,
-  };
+  const effectiveUserProfile = userProfile || buildNonPremiumProfile();
+  const effectiveTrialProfile = trialProfile || buildTrialProfile();
 
   mockSupabase.from.mockImplementation((table) => {
     if (table === 'profiles') {
       return {
-        select: () => ({
+        select: (columns = '*') => ({
           eq: (_column, value) => ({
             single: async () => {
-              if (value === userId) {
-                return { data: effectiveUserProfile, error: null };
+              if (value !== userId && (!partnerProfile || value !== partnerId)) {
+                return { data: null, error: { code: 'PGRST116' } };
               }
-              if (partnerProfile && value === partnerId) {
+
+              if (value === partnerId && partnerProfile) {
                 return { data: partnerProfile, error: null };
               }
-              return { data: null, error: { code: 'PGRST116' } };
+
+              const selected = String(columns || '');
+              const isTrialSelectWithBypass =
+                selected.includes('created_at') && selected.includes('trial_access_bypass');
+              const isTrialSelectFallback = selected.trim() === 'created_at';
+
+              if (isTrialSelectWithBypass) {
+                if (failTrialSelectWithMissingColumn) {
+                  return {
+                    data: null,
+                    error: {
+                      code: '42703',
+                      message: 'column profiles.trial_access_bypass does not exist',
+                    },
+                  };
+                }
+                if (trialProfileError) {
+                  return { data: null, error: trialProfileError };
+                }
+                return { data: effectiveTrialProfile, error: null };
+              }
+
+              if (isTrialSelectFallback) {
+                if (trialProfileError) {
+                  return { data: null, error: trialProfileError };
+                }
+                return { data: { created_at: effectiveTrialProfile.created_at }, error: null };
+              }
+
+              return { data: effectiveUserProfile, error: null };
             },
           }),
         }),
@@ -74,13 +123,11 @@ const setupSupabase = ({
 
 const setupSupabaseForMomentsLimit = ({ isPremium = false, momentsCount = 0 }) => {
   setupSupabase({
-    userProfile: {
+    userProfile: buildNonPremiumProfile({
       is_premium: isPremium,
-      premium_since: null,
       premium_expires: isPremium ? '2099-01-01T00:00:00.000Z' : null,
       premium_plan: isPremium ? 'monthly' : null,
-      partner_id: null,
-    },
+    }),
     partnershipRows: [{ id: 'partnership-1' }],
     momentsCount,
   });
@@ -138,13 +185,7 @@ describe('premiumService', () => {
       setupSupabase({
         userId: 'user-1',
         partnerId: 'user-2',
-        userProfile: {
-          is_premium: false,
-          premium_since: null,
-          premium_expires: null,
-          premium_plan: null,
-          partner_id: null,
-        },
+        userProfile: buildNonPremiumProfile(),
         partnerProfile: {
           is_premium: true,
           premium_since: '2026-01-01T00:00:00.000Z',
@@ -167,13 +208,7 @@ describe('premiumService', () => {
       setupSupabase({
         userId: 'user-1',
         partnerId: 'user-2',
-        userProfile: {
-          is_premium: false,
-          premium_since: null,
-          premium_expires: null,
-          premium_plan: null,
-          partner_id: null,
-        },
+        userProfile: buildNonPremiumProfile(),
         partnerProfile: {
           is_premium: false,
           premium_since: null,
@@ -188,6 +223,143 @@ describe('premiumService', () => {
 
       expect(result.isPremium).toBe(false);
       expect(result.source).toBe(null);
+    });
+  });
+
+  describe('getTrialAccessStatus', () => {
+    it('returns premium access when premium is active', async () => {
+      setupSupabase({
+        userProfile: buildNonPremiumProfile({
+          is_premium: true,
+          premium_expires: '2099-01-01T00:00:00.000Z',
+          premium_plan: 'monthly',
+        }),
+        trialProfile: buildTrialProfile({
+          created_at: '2026-01-01T00:00:00.000Z',
+          trial_access_bypass: false,
+        }),
+      });
+
+      const result = await getTrialAccessStatus('user-1');
+
+      expect(result).toMatchObject({
+        hasAccess: true,
+        isPremium: true,
+        isInTrial: false,
+        reason: 'premium',
+      });
+    });
+
+    it('grants access during trial and reports remaining days', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-02-28T12:00:00.000Z'));
+      setupSupabase({
+        userProfile: buildNonPremiumProfile(),
+        trialProfile: buildTrialProfile({
+          created_at: '2026-02-24T10:00:00.000Z',
+          trial_access_bypass: false,
+        }),
+      });
+
+      const result = await getTrialAccessStatus('user-1');
+
+      expect(result.hasAccess).toBe(true);
+      expect(result.isInTrial).toBe(true);
+      expect(result.daysRemaining).toBe(3);
+      expect(result.reason).toBe('trial');
+    });
+
+    it('denies access when trial is expired', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-02-28T12:00:00.000Z'));
+      setupSupabase({
+        userProfile: buildNonPremiumProfile(),
+        trialProfile: buildTrialProfile({
+          created_at: '2026-02-10T00:00:00.000Z',
+          trial_access_bypass: false,
+        }),
+      });
+
+      const result = await getTrialAccessStatus('user-1');
+
+      expect(result).toMatchObject({
+        hasAccess: false,
+        isPremium: false,
+        isInTrial: false,
+        daysRemaining: 0,
+        reason: 'expired',
+      });
+    });
+
+    it('bypasses trial lock when trial_access_bypass is enabled', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-02-28T12:00:00.000Z'));
+      setupSupabase({
+        userProfile: buildNonPremiumProfile(),
+        trialProfile: buildTrialProfile({
+          created_at: '2026-01-01T00:00:00.000Z',
+          trial_access_bypass: true,
+        }),
+      });
+
+      const result = await getTrialAccessStatus('user-1');
+
+      expect(result).toMatchObject({
+        hasAccess: true,
+        isPremium: false,
+        isInTrial: false,
+        reason: 'bypass',
+      });
+    });
+
+    it('falls back when bypass column is missing in older DB schema', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-02-28T00:00:00.000Z'));
+      setupSupabase({
+        userProfile: buildNonPremiumProfile(),
+        trialProfile: buildTrialProfile({
+          created_at: '2026-02-27T00:00:00.000Z',
+        }),
+        failTrialSelectWithMissingColumn: true,
+      });
+
+      const result = await getTrialAccessStatus('user-1');
+
+      expect(result.hasAccess).toBe(true);
+      expect(result.isInTrial).toBe(true);
+      expect(result.daysRemaining).toBe(TRIAL_DAYS - 1);
+      expect(result.reason).toBe('trial');
+    });
+
+    it('fails closed when trial profile query errors', async () => {
+      setupSupabase({
+        userProfile: buildNonPremiumProfile(),
+        trialProfileError: { code: 'PGRST999', message: 'db unavailable' },
+      });
+
+      const result = await getTrialAccessStatus('user-1');
+
+      expect(result).toMatchObject({
+        hasAccess: false,
+        isPremium: false,
+        isInTrial: false,
+        daysRemaining: 0,
+        reason: 'error',
+      });
+    });
+
+    it('treats missing created_at as a fresh trial start', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-02-28T00:00:00.000Z'));
+      setupSupabase({
+        userProfile: buildNonPremiumProfile(),
+        trialProfile: buildTrialProfile({
+          created_at: null,
+          trial_access_bypass: false,
+        }),
+      });
+
+      const result = await getTrialAccessStatus('user-1');
+
+      expect(result.hasAccess).toBe(true);
+      expect(result.isInTrial).toBe(true);
+      expect(result.daysRemaining).toBe(TRIAL_DAYS);
+      expect(result.reason).toBe('trial');
     });
   });
 });
