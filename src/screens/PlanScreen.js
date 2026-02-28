@@ -1,5 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, StyleSheet, Alert, TouchableOpacity, Platform } from 'react-native';
+import {
+  View,
+  Text,
+  ScrollView,
+  StyleSheet,
+  Alert,
+  TouchableOpacity,
+  Platform,
+  Keyboard,
+  InputAccessoryView,
+} from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useAuth } from '../contexts/AuthContext';
 import { plansService, BUDGET_OPTIONS, VIBE_OPTIONS } from '../services/plansService';
@@ -18,6 +28,11 @@ export const PlanScreen = ({ onNavigate }) => {
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [budget, setBudget] = useState('Medium');
   const [vibe, setVibe] = useState('Casual');
+  const titleInputAccessoryViewId = 'plan-title-input-accessory';
+
+  const handleTitleChange = (nextTitle) => {
+    setTitle(nextTitle);
+  };
 
   useEffect(() => {
     console.log('[PLAN SCREEN] Mounted');
@@ -236,8 +251,24 @@ export const PlanScreen = ({ onNavigate }) => {
           <Input
             placeholder="What do you want to do?"
             value={title}
-            onChangeText={setTitle}
+            onChangeText={handleTitleChange}
+            autoCorrect={false}
+            spellCheck={false}
+            returnKeyType="done"
+            blurOnSubmit
+            onSubmitEditing={Keyboard.dismiss}
+            inputAccessoryViewID={Platform.OS === 'ios' ? titleInputAccessoryViewId : undefined}
           />
+
+          {Platform.OS === 'ios' && (
+            <InputAccessoryView nativeID={titleInputAccessoryViewId}>
+              <View style={styles.inputAccessory}>
+                <TouchableOpacity onPress={Keyboard.dismiss} style={styles.inputAccessoryBtn}>
+                  <Text style={styles.inputAccessoryBtnText}>Done</Text>
+                </TouchableOpacity>
+              </View>
+            </InputAccessoryView>
+          )}
           
           {/* Date Picker Button */}
           <View style={styles.datePickerContainer}>
@@ -449,4 +480,23 @@ const styles = StyleSheet.create({
   completeBtn: { marginTop: 10 },
   emptyText: { textAlign: 'center', color: '#999', fontStyle: 'italic', marginTop: 20 },
   backBtn: { marginTop: 15 },
+  inputAccessory: {
+    backgroundColor: '#F5F5F5',
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    alignItems: 'flex-end',
+  },
+  inputAccessoryBtn: {
+    backgroundColor: '#6C63FF',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  inputAccessoryBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
 });

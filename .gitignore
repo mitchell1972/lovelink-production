@@ -5,4 +5,3 @@ node_modules/
 # Optional: keep local env secrets out of git
 .env
 .env.*
-
