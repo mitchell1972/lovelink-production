@@ -33,7 +33,7 @@
         "backgroundColor": "#6C63FF"
       },
       "package": "com.mitchellagoma.lovelink.play2026",
-      "versionCode": 2,
+      "versionCode": 4,
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.READ_EXTERNAL_STORAGE",
