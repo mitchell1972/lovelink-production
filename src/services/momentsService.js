@@ -1,6 +1,7 @@
 import { supabase } from '../config/supabase';
 import * as FileSystem from 'expo-file-system/legacy';
 import { decode } from 'base64-arraybuffer';
+import { withServiceTimeout } from './serviceTimeout';
 
 export const momentsService = {
   async uploadMoment(partnershipId, userId, imageUri, caption = '') {
@@ -51,12 +52,15 @@ export const momentsService = {
   async getMoments(partnershipId, limit = 50) {
     console.log('[MOMENTS SERVICE] getMoments called');
     
-    const { data, error } = await supabase
-      .from('moments')
-      .select('*')
-      .eq('partnership_id', partnershipId)
-      .order('created_at', { ascending: false })
-      .limit(limit);
+    const { data, error } = await withServiceTimeout(
+      supabase
+        .from('moments')
+        .select('*')
+        .eq('partnership_id', partnershipId)
+        .order('created_at', { ascending: false })
+        .limit(limit),
+      'moments.getMoments'
+    );
 
     if (error) {
       console.log('[MOMENTS SERVICE] Fetch error:', error);

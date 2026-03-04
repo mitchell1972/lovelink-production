@@ -16,7 +16,7 @@ ENV['RCT_NEW_ARCH_ENABLED'] ||= '0' if podfile_properties['newArchEnabled'] == '
 ENV['EX_DEV_CLIENT_NETWORK_INSPECTOR'] ||= podfile_properties['EX_DEV_CLIENT_NETWORK_INSPECTOR']
 ENV['RCT_USE_RN_DEP'] ||= '1' if podfile_properties['ios.buildReactNativeFromSource'] != 'true' && podfile_properties['newArchEnabled'] != 'false'
 ENV['RCT_USE_PREBUILT_RNCORE'] ||= '1' if podfile_properties['ios.buildReactNativeFromSource'] != 'true' && podfile_properties['newArchEnabled'] != 'false'
-platform :ios, podfile_properties['ios.deploymentTarget'] || '15.1'
+platform :ios, podfile_properties['ios.deploymentTarget'] || '16.0'
 
 prepare_react_native_project!
 
@@ -59,5 +59,19 @@ target 'LoveLink' do
       :mac_catalyst_enabled => false,
       :ccache_enabled => ccache_enabled?(podfile_properties),
     )
+
+    # Xcode 16.2 can crash while compiling NitroIap's generated Swift/C++ bridge sources on simulator.
+    # Keep device builds unchanged, and compile a minimal NitroIap target for simulator runs.
+    installer.pods_project.targets.each do |target|
+      next unless target.name == 'NitroIap'
+
+      target.build_configurations.each do |build_config|
+        build_config.build_settings['EXCLUDED_SOURCE_FILE_NAMES[sdk=iphonesimulator*]'] = '*.swift *.mm *.cpp'
+        build_config.build_settings['INCLUDED_SOURCE_FILE_NAMES[sdk=iphonesimulator*]'] = 'RnIapLog.swift'
+        build_config.build_settings['SWIFT_COMPILATION_MODE'] = 'singlefile'
+        build_config.build_settings['SWIFT_ENABLE_BATCH_MODE'] = 'NO'
+        build_config.build_settings['SWIFT_REFLECTION_METADATA_LEVEL'] = 'none'
+      end
+    end
   end
 end

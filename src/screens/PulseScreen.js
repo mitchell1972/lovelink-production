@@ -1,13 +1,12 @@
 // src/screens/PulseScreen.js
 // Send heartbeat pulses to partner with premium patterns
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
-  Alert,
   Animated,
   Vibration,
   ScrollView,
@@ -16,6 +15,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { pulseService } from '../services/pulseService';
 import { notificationService } from '../services/notificationService';
 import { getAvailablePulsePatterns, getPremiumStatus } from '../services/premiumService';
+import { showAlert, showConfirm, showUpgradePrompt } from '../services/webAlert';
 
 // All pulse patterns (some locked for free users)
 const ALL_PULSE_PATTERNS = {
@@ -66,13 +66,8 @@ export default function PulseScreen({ onNavigate }) {
   const [isPremium, setIsPremium] = useState(false);
   const pulseAnim = useState(new Animated.Value(1))[0];
 
-  useEffect(() => {
-    loadPulses();
-    loadAvailablePatterns();
-  }, []);
-
-  const loadAvailablePatterns = async () => {
-    if (!user) return;
+  const loadAvailablePatterns = useCallback(async () => {
+    if (!user?.id) return;
     try {
       const status = await getPremiumStatus(user.id);
       setIsPremium(status.isPremium);
@@ -82,10 +77,15 @@ export default function PulseScreen({ onNavigate }) {
       console.error('Error loading patterns:', error);
       setAvailablePatterns(['heartbeat']);
     }
-  };
+  }, [user?.id]);
 
-  const loadPulses = async () => {
-    if (!user || !partnership?.id) return;
+  const loadPulses = useCallback(async () => {
+    if (!user?.id || !partnership?.id) {
+      setMyPulses([]);
+      setReceivedPulses([]);
+      return;
+    }
+
     try {
       const [myData, receivedData] = await Promise.all([
         pulseService.getMyPulses(partnership.id, user.id),
@@ -96,7 +96,24 @@ export default function PulseScreen({ onNavigate }) {
     } catch (error) {
       console.error('Error loading pulses:', error);
     }
-  };
+  }, [user?.id, partnership?.id]);
+
+  useEffect(() => {
+    loadAvailablePatterns();
+  }, [loadAvailablePatterns]);
+
+  useEffect(() => {
+    if (!user?.id || !partnership?.id) {
+      return undefined;
+    }
+
+    loadPulses();
+    const subscription = pulseService.subscribeToPulses(partnership.id, () => {
+      loadPulses();
+    });
+
+    return () => subscription?.unsubscribe();
+  }, [user?.id, partnership?.id, loadPulses]);
 
   const handleBack = () => {
     onNavigate('home');
@@ -119,7 +136,7 @@ export default function PulseScreen({ onNavigate }) {
 
   const handleSendPulse = async () => {
     if (!partnership?.id) {
-      Alert.alert('No Partner', 'Connect with your partner first!');
+      showAlert('No Partner', 'Connect with your partner first!');
       return;
     }
 
@@ -140,13 +157,13 @@ export default function PulseScreen({ onNavigate }) {
         console.log('[PULSE] Notification send failed (non-blocking):', notifError?.message || notifError);
       }
 
-      Alert.alert(
+      showAlert(
         pattern.icon + ' Pulse Sent!',
         'Your partner will feel your ' + pattern.name.toLowerCase()
       );
     } catch (error) {
       console.error('Error sending pulse:', error);
-      Alert.alert('Error', 'Failed to send pulse. Please try again.');
+      showAlert('Error', 'Failed to send pulse. Please try again.');
     } finally {
       setSending(false);
     }
@@ -154,30 +171,25 @@ export default function PulseScreen({ onNavigate }) {
 
   const handleDeletePulse = async (pulse) => {
     if (!pulse?.isFromMe) {
-      Alert.alert('Not Allowed', 'You can only delete pulses you sent.');
+      showAlert('Not Allowed', 'You can only delete pulses you sent.');
       return;
     }
 
-    Alert.alert(
-      'Delete Pulse',
-      'Remove this pulse from your history?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await pulseService.deletePulse(pulse.id, user.id);
-              await loadPulses();
-              Alert.alert('Deleted', 'Pulse removed from history');
-            } catch (error) {
-              Alert.alert('Error', 'Failed to delete pulse');
-            }
-          },
-        },
-      ]
-    );
+    showConfirm({
+      title: 'Delete Pulse',
+      message: 'Remove this pulse from your history?',
+      confirmText: 'Delete',
+      destructive: true,
+      onConfirm: async () => {
+        try {
+          await pulseService.deletePulse(pulse.id, user.id);
+          await loadPulses();
+          showAlert('Deleted', 'Pulse removed from history');
+        } catch (error) {
+          showAlert('Error', 'Failed to delete pulse');
+        }
+      },
+    });
   };
 
   const renderPatternOption = (patternKey) => {
@@ -198,14 +210,13 @@ export default function PulseScreen({ onNavigate }) {
             setSelectedPattern(patternKey);
             Vibration.vibrate(pattern.vibration);
           } else {
-            Alert.alert(
-              '🔒 Premium Pattern',
-              '"' + pattern.name + '" is a Premium-only pattern.\n\nUpgrade to unlock all 5 pulse patterns!',
-              [
-                { text: 'Maybe Later', style: 'cancel' },
-                { text: '💎 Go Premium', onPress: () => onNavigate('premium') },
-              ]
-            );
+            showUpgradePrompt({
+              title: '🔒 Premium Pattern',
+              message: '"' + pattern.name + '" is a Premium-only pattern.\n\nUpgrade to unlock all 5 pulse patterns!',
+              upgradeText: '💎 Go Premium',
+              cancelText: 'Maybe Later',
+              onUpgrade: () => onNavigate('premium'),
+            });
           }
         }}
         disabled={sending}
@@ -242,9 +253,18 @@ export default function PulseScreen({ onNavigate }) {
   const allPulses = [...myPulses.map(p => ({...p, isFromMe: true})), ...receivedPulses.map(p => ({...p, isFromMe: false}))]
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
     .slice(0, 10);
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const receivedTodayCount = receivedPulses.filter((pulse) => {
+    return new Date(pulse.created_at) >= startOfToday;
+  }).length;
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.scrollContent}
+      showsVerticalScrollIndicator={false}
+    >
       <TouchableOpacity style={styles.backBtn} onPress={handleBack}>
         <Text style={styles.backBtnText}>← Back</Text>
       </TouchableOpacity>
@@ -324,15 +344,17 @@ export default function PulseScreen({ onNavigate }) {
         </View>
       )}
 
-      {receivedPulses.length > 0 && (
+      {receivedTodayCount > 0 && (
         <View style={styles.receivedBanner}>
           <Text style={styles.receivedText}>
-            💕 Your partner sent you {receivedPulses.length} pulse{receivedPulses.length > 1 ? 's' : ''} today!
+            💕 Your partner sent you {receivedTodayCount} pulse{receivedTodayCount > 1 ? 's' : ''} today!
           </Text>
         </View>
       )}
 
-      <View style={{ height: 40 }} />
+      <TouchableOpacity style={styles.bottomBackBtn} onPress={handleBack}>
+        <Text style={styles.bottomBackBtnText}>← Back</Text>
+      </TouchableOpacity>
     </ScrollView>
   );
 }
@@ -341,6 +363,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     padding: 20,
+  },
+  scrollContent: {
+    paddingBottom: 40,
   },
   backBtn: {
     marginBottom: 10,
@@ -532,6 +557,21 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 15,
     fontWeight: '500',
+  },
+  bottomBackBtn: {
+    marginTop: 16,
+    marginBottom: 6,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderColor: 'rgba(255,255,255,0.35)',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  bottomBackBtnText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
   noPartnerContainer: {
     flex: 1,

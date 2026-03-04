@@ -4,7 +4,6 @@ import {
   Text,
   ScrollView,
   StyleSheet,
-  Alert,
   TouchableOpacity,
   Platform,
   Keyboard,
@@ -14,12 +13,15 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { useAuth } from '../contexts/AuthContext';
 import { plansService, BUDGET_OPTIONS, VIBE_OPTIONS } from '../services/plansService';
 import { notificationService } from '../services/notificationService';
-import { Card, Heading, Subheading, Input, Button, colors } from '../components/ui';
+import { isServiceTimeoutError } from '../services/serviceTimeout';
+import { showAlert, showConfirm } from '../services/webAlert';
+import { Card, Heading, Subheading, Input, Button } from '../components/ui';
 
 export const PlanScreen = ({ onNavigate }) => {
   const { user, partnership } = useAuth();
   const [plans, setPlans] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
   
   const [title, setTitle] = useState('');
@@ -35,6 +37,10 @@ export const PlanScreen = ({ onNavigate }) => {
   };
 
   useEffect(() => {
+    if (!partnership?.id) {
+      return undefined;
+    }
+
     console.log('[PLAN SCREEN] Mounted');
     loadPlans();
     
@@ -47,16 +53,27 @@ export const PlanScreen = ({ onNavigate }) => {
     );
 
     return () => subscription?.unsubscribe();
-  }, []);
+  }, [partnership?.id]);
 
   const loadPlans = async () => {
+    if (!partnership?.id) {
+      setPlans([]);
+      setLoading(false);
+      return;
+    }
+
     console.log('[PLAN SCREEN] loadPlans called');
     setLoading(true);
+    setLoadError('');
     try {
       const data = await plansService.getPlans(partnership.id);
       setPlans(data || []);
     } catch (err) {
       console.log('[PLAN SCREEN] ERROR loading plans:', err);
+      const message = isServiceTimeoutError(err)
+        ? 'Loading plans is taking too long. Please try again.'
+        : (err?.message || 'Failed to load plans.');
+      setLoadError(message);
     } finally {
       setLoading(false);
     }
@@ -117,7 +134,7 @@ export const PlanScreen = ({ onNavigate }) => {
   const handleAddPlan = async () => {
     console.log('[PLAN SCREEN] handleAddPlan called');
     if (!title.trim()) {
-      Alert.alert('Error', 'Please enter a plan title');
+      showAlert('Error', 'Please enter a plan title');
       return;
     }
 
@@ -143,10 +160,10 @@ export const PlanScreen = ({ onNavigate }) => {
         console.log('[PLAN SCREEN] Notification send failed (non-blocking):', notifError?.message || notifError);
       }
       
-      Alert.alert('Plan Created! 📅', `Waiting for ${partnership.partner.name} to confirm.`);
+      showAlert('Plan Created! 📅', `Waiting for ${partnership.partner.name} to confirm.`);
     } catch (err) {
       console.log('[PLAN SCREEN] ERROR creating plan:', err);
-      Alert.alert('Error', err.message || 'Failed to create plan');
+      showAlert('Error', err.message || 'Failed to create plan');
     } finally {
       setLoading(false);
     }
@@ -164,10 +181,10 @@ export const PlanScreen = ({ onNavigate }) => {
         console.log('[PLAN SCREEN] Notification send failed (non-blocking):', notifError?.message || notifError);
       }
 
-      Alert.alert('Plan Confirmed! 🎉', 'You both agreed to this plan!');
+      showAlert('Plan Confirmed! 🎉', 'You both agreed to this plan!');
       loadPlans();
     } catch (err) {
-      Alert.alert('Error', 'Failed to confirm plan');
+      showAlert('Error', 'Failed to confirm plan');
     }
   };
 
@@ -175,10 +192,10 @@ export const PlanScreen = ({ onNavigate }) => {
     console.log('[PLAN SCREEN] handleReject called');
     try {
       await plansService.rejectPlan(plan.id, user.id);
-      Alert.alert('Plan Rejected', 'Maybe suggest a different idea?');
+      showAlert('Plan Rejected', 'Maybe suggest a different idea?');
       loadPlans();
     } catch (err) {
-      Alert.alert('Error', 'Failed to reject plan');
+      showAlert('Error', 'Failed to reject plan');
     }
   };
 
@@ -186,35 +203,30 @@ export const PlanScreen = ({ onNavigate }) => {
     console.log('[PLAN SCREEN] handleComplete called');
     try {
       await plansService.completePlan(plan.id);
-      Alert.alert('Done! ✨', 'Hope you had a great time!');
+      showAlert('Done! ✨', 'Hope you had a great time!');
       loadPlans();
     } catch (err) {
-      Alert.alert('Error', 'Failed to complete plan');
+      showAlert('Error', 'Failed to complete plan');
     }
   };
 
   const handleDelete = (plan) => {
     console.log('[PLAN SCREEN] handleDelete called');
-    Alert.alert(
-      'Delete Plan',
-      `Are you sure you want to delete "${plan.title}"?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await plansService.deletePlan(plan.id);
-              Alert.alert('Deleted', 'Plan has been removed.');
-              loadPlans();
-            } catch (err) {
-              Alert.alert('Error', 'Failed to delete plan');
-            }
-          },
-        },
-      ]
-    );
+    showConfirm({
+      title: 'Delete Plan',
+      message: `Are you sure you want to delete "${plan.title}"?`,
+      confirmText: 'Delete',
+      destructive: true,
+      onConfirm: async () => {
+        try {
+          await plansService.deletePlan(plan.id);
+          showAlert('Deleted', 'Plan has been removed.');
+          loadPlans();
+        } catch (err) {
+          showAlert('Error', 'Failed to delete plan');
+        }
+      },
+    });
   };
 
   const clearDate = () => {
@@ -242,33 +254,47 @@ export const PlanScreen = ({ onNavigate }) => {
   };
 
   return (
-    <Card>
-      <Heading>Plans</Heading>
-      <Subheading>Plan dates together with {partnership.partner.name}</Subheading>
+    <ScrollView
+      style={styles.screenScroll}
+      contentContainerStyle={styles.screenScrollContent}
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
+      showsVerticalScrollIndicator={false}
+    >
+      <Card>
+        <Heading>Plans</Heading>
+        <Subheading>Plan dates together with {partnership.partner.name}</Subheading>
 
-      {showAddForm ? (
-        <View style={styles.form}>
-          <Input
-            placeholder="What do you want to do?"
-            value={title}
-            onChangeText={handleTitleChange}
-            autoCorrect={false}
-            spellCheck={false}
-            returnKeyType="done"
-            blurOnSubmit
-            onSubmitEditing={Keyboard.dismiss}
-            inputAccessoryViewID={Platform.OS === 'ios' ? titleInputAccessoryViewId : undefined}
-          />
+        {loadError ? (
+          <View style={styles.errorBanner}>
+            <Text style={styles.errorText}>{loadError}</Text>
+            <Button title="Retry" size="small" variant="secondary" onPress={loadPlans} />
+          </View>
+        ) : null}
 
-          {Platform.OS === 'ios' && (
-            <InputAccessoryView nativeID={titleInputAccessoryViewId}>
-              <View style={styles.inputAccessory}>
-                <TouchableOpacity onPress={Keyboard.dismiss} style={styles.inputAccessoryBtn}>
-                  <Text style={styles.inputAccessoryBtnText}>Done</Text>
-                </TouchableOpacity>
-              </View>
-            </InputAccessoryView>
-          )}
+        {showAddForm ? (
+          <View style={styles.form}>
+            <Input
+              placeholder="What do you want to do?"
+              value={title}
+              onChangeText={handleTitleChange}
+              autoCorrect={false}
+              spellCheck={false}
+              returnKeyType="done"
+              blurOnSubmit
+              onSubmitEditing={Keyboard.dismiss}
+              inputAccessoryViewID={Platform.OS === 'ios' ? titleInputAccessoryViewId : undefined}
+            />
+
+            {Platform.OS === 'ios' && (
+              <InputAccessoryView nativeID={titleInputAccessoryViewId}>
+                <View style={styles.inputAccessory}>
+                  <TouchableOpacity onPress={Keyboard.dismiss} style={styles.inputAccessoryBtn}>
+                    <Text style={styles.inputAccessoryBtnText}>Done</Text>
+                  </TouchableOpacity>
+                </View>
+              </InputAccessoryView>
+            )}
           
           {/* Date Picker Button */}
           <View style={styles.datePickerContainer}>
@@ -358,67 +384,85 @@ export const PlanScreen = ({ onNavigate }) => {
             ))}
           </View>
 
-          <Button title="💾 Save Plan" onPress={handleAddPlan} loading={loading} />
-          <Button title="Cancel" variant="secondary" onPress={() => setShowAddForm(false)} />
-        </View>
-      ) : (
-        <Button title="➕ Add Plan" onPress={() => setShowAddForm(true)} />
-      )}
-
-      <ScrollView style={styles.plansList} showsVerticalScrollIndicator={false}>
-        {plans.length === 0 && !showAddForm ? (
-          <Text style={styles.emptyText}>No plans yet. Create one!</Text>
+            <Button title="💾 Save Plan" onPress={handleAddPlan} loading={loading} />
+            <Button title="Cancel" variant="secondary" onPress={() => setShowAddForm(false)} />
+          </View>
         ) : (
-          plans.map((plan) => (
-            <View
-              key={plan.id}
-              style={[styles.planCard, { backgroundColor: getStatusColor(plan.status) }]}
-            >
-              <View style={styles.planHeader}>
-                <Text style={styles.planTitle}>
-                  {getStatusEmoji(plan.status)} {plan.title}
-                </Text>
-                <TouchableOpacity onPress={() => handleDelete(plan)} style={styles.deleteBtn}>
-                  <Text style={styles.deleteBtnText}>🗑️</Text>
-                </TouchableOpacity>
-              </View>
-              
-              {plan.scheduled_date && (
-                <Text style={styles.planDate}>
-                  📅 {formatDisplayDate(new Date(plan.scheduled_date))}
-                </Text>
-              )}
-              <Text style={styles.planMeta}>💰 {plan.budget} • ✨ {plan.vibe}</Text>
-              <Text style={styles.planCreator}>
-                Created by {plan.created_by === user.id ? 'you' : partnership.partner.name}
-              </Text>
-
-              {plan.status === 'draft' && plan.created_by !== user.id && (
-                <View style={styles.actionRow}>
-                  <Button title="✅ Confirm" size="small" onPress={() => handleConfirm(plan)} style={styles.actionBtn} />
-                  <Button title="❌ Reject" size="small" variant="danger" onPress={() => handleReject(plan)} style={styles.actionBtn} />
-                </View>
-              )}
-
-              {plan.status === 'draft' && plan.created_by === user.id && (
-                <Text style={styles.waitingText}>Waiting for {partnership.partner.name}...</Text>
-              )}
-
-              {plan.status === 'confirmed' && (
-                <Button title="✨ Mark Complete" size="small" onPress={() => handleComplete(plan)} style={styles.completeBtn} />
-              )}
-            </View>
-          ))
+          <Button title="➕ Add Plan" onPress={() => setShowAddForm(true)} />
         )}
-      </ScrollView>
 
-      <Button title="← Back" variant="secondary" onPress={() => onNavigate('home')} style={styles.backBtn} />
-    </Card>
+        <View style={styles.plansList}>
+          {plans.length === 0 && !showAddForm ? (
+            <Text style={styles.emptyText}>No plans yet. Create one!</Text>
+          ) : (
+            plans.map((plan) => (
+              <View
+                key={plan.id}
+                style={[styles.planCard, { backgroundColor: getStatusColor(plan.status) }]}
+              >
+                <View style={styles.planHeader}>
+                  <Text style={styles.planTitle}>
+                    {getStatusEmoji(plan.status)} {plan.title}
+                  </Text>
+                  <TouchableOpacity onPress={() => handleDelete(plan)} style={styles.deleteBtn}>
+                    <Text style={styles.deleteBtnText}>🗑️</Text>
+                  </TouchableOpacity>
+                </View>
+                
+                {plan.scheduled_date && (
+                  <Text style={styles.planDate}>
+                    📅 {formatDisplayDate(new Date(plan.scheduled_date))}
+                  </Text>
+                )}
+                <Text style={styles.planMeta}>💰 {plan.budget} • ✨ {plan.vibe}</Text>
+                <Text style={styles.planCreator}>
+                  Created by {plan.created_by === user.id ? 'you' : partnership.partner.name}
+                </Text>
+
+                {plan.status === 'draft' && plan.created_by !== user.id && (
+                  <View style={styles.actionRow}>
+                    <Button title="✅ Confirm" size="small" onPress={() => handleConfirm(plan)} style={styles.actionBtn} />
+                    <Button title="❌ Reject" size="small" variant="danger" onPress={() => handleReject(plan)} style={styles.actionBtn} />
+                  </View>
+                )}
+
+                {plan.status === 'draft' && plan.created_by === user.id && (
+                  <Text style={styles.waitingText}>Waiting for {partnership.partner.name}...</Text>
+                )}
+
+                {plan.status === 'confirmed' && (
+                  <Button title="✨ Mark Complete" size="small" onPress={() => handleComplete(plan)} style={styles.completeBtn} />
+                )}
+              </View>
+            ))
+          )}
+        </View>
+
+        <Button title="← Back" variant="secondary" onPress={() => onNavigate('home')} style={styles.backBtn} />
+      </Card>
+    </ScrollView>
   );
 };
 
 const styles = StyleSheet.create({
+  screenScroll: {
+    flex: 1,
+  },
+  screenScrollContent: {
+    paddingBottom: 40,
+  },
   form: { marginTop: 10 },
+  errorBanner: {
+    backgroundColor: '#FFEBEE',
+    borderRadius: 10,
+    marginTop: 12,
+    padding: 12,
+  },
+  errorText: {
+    color: '#B71C1C',
+    fontSize: 13,
+    marginBottom: 8,
+  },
   label: { fontSize: 14, fontWeight: '600', color: '#666', marginTop: 10, marginBottom: 5 },
   optionRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 10 },
   optionBtn: { marginRight: 8, marginBottom: 8 },
@@ -465,7 +509,7 @@ const styles = StyleSheet.create({
     height: 180,
   },
   
-  plansList: { maxHeight: 300, marginTop: 15 },
+  plansList: { marginTop: 15 },
   planCard: { padding: 15, borderRadius: 10, marginBottom: 10 },
   planHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   planTitle: { fontSize: 16, fontWeight: '600', color: '#333', flex: 1 },

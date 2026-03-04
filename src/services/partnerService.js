@@ -1,18 +1,45 @@
 import { supabase } from '../config/supabase';
 
+const missingRpcFunctionCodes = new Set(['PGRST202', '42883']);
+
 export const partnerService = {
   /**
-   * Generate a new unique partner code for the user
+   * Generate a new unique partner code for the user.
+   * In newer DB deployments this also unlinks any active partnership first.
    */
   async generateCode(userId) {
-    // First, invalidate any existing unused codes
-    await supabase
+    // Preferred path: server-side RPC that atomically unlinks (if needed)
+    // and generates a new code.
+    const { data: regenerateData, error: regenerateError } = await supabase
+      .rpc('regenerate_partner_code');
+
+    if (!regenerateError && regenerateData) {
+      if (regenerateData.success === false) {
+        throw new Error(regenerateData.error || 'Failed to generate partner code');
+      }
+
+      if (regenerateData.code?.code) {
+        return {
+          ...regenerateData.code,
+          unlinked: !!regenerateData.unlinked,
+        };
+      }
+    }
+
+    if (regenerateError && !missingRpcFunctionCodes.has(regenerateError.code)) {
+      throw regenerateError;
+    }
+
+    // Backward-compatible fallback for DBs that don't have the RPC yet.
+    const { error: invalidateError } = await supabase
       .from('partner_codes')
       .delete()
       .eq('user_id', userId)
       .is('used_at', null);
 
-    // Generate new code using the database function
+    if (invalidateError) throw invalidateError;
+
+    // Generate new code using the existing function
     const { data: codeResult, error: codeError } = await supabase
       .rpc('generate_partner_code');
 
@@ -125,9 +152,23 @@ export const partnerService = {
 
     if (!error) return data;
 
+    const message = (error.message || '').toLowerCase();
+    const isAlreadyLinkedConstraint =
+      error.code === '23514' ||
+      message.includes('one active partnership') ||
+      message.includes('already in an active partnership') ||
+      message.includes('already linked');
+
+    if (isAlreadyLinkedConstraint) {
+      return {
+        success: false,
+        error:
+          'One of you is already linked to another partner. Unlink first before creating a new connection.',
+      };
+    }
+
     // Some DB deployments still throw a raw unique constraint error when the
     // couple is already linked. Recover gracefully instead of hard-failing.
-    const message = (error.message || '').toLowerCase();
     const isDuplicatePartnership =
       error.code === '23505' ||
       message.includes('unique_partnership') ||
@@ -208,26 +249,77 @@ export const partnerService = {
    * Get the current partnership
    */
   async getPartnership(userId) {
-    const { data, error } = await supabase
-      .from('partnerships')
-      .select(`
-        *,
-        partner1:user1_id(id, name, avatar_url),
-        partner2:user2_id(id, name, avatar_url)
-      `)
-      .or(`user1_id.eq.${userId},user2_id.eq.${userId}`)
-      .eq('status', 'active')
-      .single();
+    const getBaseRows = async () => {
+      const { data, error } = await supabase
+        .from('partnerships')
+        .select('*')
+        .or(`user1_id.eq.${userId},user2_id.eq.${userId}`)
+        .eq('status', 'active')
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .limit(20);
 
-    if (error?.code === 'PGRST116') {
-      return null; // No partnership found
+      if (error) throw error;
+      return Array.isArray(data) ? data : (data ? [data] : []);
+    };
+
+    const getRowsWithEmbeddedProfiles = async () => {
+      const { data, error } = await supabase
+        .from('partnerships')
+        .select(`
+          *,
+          partner1:user1_id(id, name, avatar_url),
+          partner2:user2_id(id, name, avatar_url)
+        `)
+        .or(`user1_id.eq.${userId},user2_id.eq.${userId}`)
+        .eq('status', 'active')
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .limit(20);
+
+      if (error) throw error;
+      return Array.isArray(data) ? data : (data ? [data] : []);
+    };
+
+    let rows = [];
+    let usedFallback = false;
+
+    try {
+      rows = await getRowsWithEmbeddedProfiles();
+    } catch (embeddedError) {
+      // Some PostgREST deployments can fail embedding when FK relationships are ambiguous.
+      // Fall back to a plain partnerships query and fetch partner profile separately.
+      console.log('[PARTNER] Embedded partnership query failed, using fallback:', embeddedError?.message || embeddedError);
+      rows = await getBaseRows();
+      usedFallback = true;
     }
 
-    if (error) throw error;
+    if (!rows.length) return null;
 
-    // Determine which partner is the "other" person
-    const partner = data.user1_id === userId ? data.partner2 : data.partner1;
-    return { ...data, partner };
+    // Legacy data can contain multiple active rows (for example A-B and B-A).
+    // Always pick the same newest row for both users to avoid mismatched
+    // partnership IDs across devices.
+    const selected = rows[0];
+
+    const partnerId = selected.user1_id === userId ? selected.user2_id : selected.user1_id;
+    let partner = selected.user1_id === userId ? selected.partner2 : selected.partner1;
+
+    if (!partner?.id || usedFallback) {
+      const { data: partnerProfile } = await supabase
+        .from('profiles')
+        .select('id, name, avatar_url')
+        .eq('id', partnerId)
+        .maybeSingle();
+
+      if (partnerProfile?.id) {
+        partner = partnerProfile;
+      }
+    }
+
+    return {
+      ...selected,
+      partner: partner || (partnerId ? { id: partnerId, name: 'Partner', avatar_url: null } : null),
+    };
   },
 
   /**

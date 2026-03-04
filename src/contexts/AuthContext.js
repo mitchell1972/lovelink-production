@@ -112,19 +112,54 @@ export const AuthProvider = ({ children }) => {
       setPartnership(null);
       return { success: true };
     } catch (err) {
+      // Ensure user is logged out in-app even if remote sign-out request fails.
+      setUser(null);
+      setProfile(null);
+      setPartnership(null);
       setError(err.message);
       return { success: false, error: err.message };
     }
   };
 
-  const refreshPartnership = async () => {
+  const refreshPartnership = async (linkResult = null) => {
     if (!user) return;
     try {
       const userPartnership = await partnerService.getPartnership(user.id);
-      setPartnership(userPartnership);
-      return userPartnership;
+      if (userPartnership) {
+        setPartnership(userPartnership);
+        return userPartnership;
+      }
+
+      // Fallback: immediately mark the user as paired from a successful link
+      // result, even if the subsequent read is temporarily stale.
+      if (linkResult?.success && linkResult?.partnership_id && linkResult?.partner_id) {
+        const optimistic = {
+          id: linkResult.partnership_id,
+          user1_id: user.id,
+          user2_id: linkResult.partner_id,
+          status: 'active',
+          partner: { id: linkResult.partner_id, name: 'Partner', avatar_url: null },
+        };
+        setPartnership(optimistic);
+        return optimistic;
+      }
+
+      setPartnership(null);
+      return null;
     } catch (err) {
       console.error('Error refreshing partnership:', err);
+      if (linkResult?.success && linkResult?.partnership_id && linkResult?.partner_id) {
+        const optimistic = {
+          id: linkResult.partnership_id,
+          user1_id: user.id,
+          user2_id: linkResult.partner_id,
+          status: 'active',
+          partner: { id: linkResult.partner_id, name: 'Partner', avatar_url: null },
+        };
+        setPartnership(optimistic);
+        return optimistic;
+      }
+      return null;
     }
   };
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, Alert, Keyboard, StyleSheet } from 'react-native';
+import { View, Text, Alert, Keyboard, StyleSheet, Platform, InputAccessoryView } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useAuth } from '../contexts/AuthContext';
 import { partnerService } from '../services/partnerService';
@@ -11,6 +11,7 @@ export const LinkPartnerScreen = () => {
   const [myCode, setMyCode] = useState(null);
   const [loading, setLoading] = useState(false);
   const [loadingCode, setLoadingCode] = useState(true);
+  const linkCodeInputAccessoryViewId = 'link-code-input-accessory';
 
   // Load or generate user's code on mount
   useEffect(() => {
@@ -69,7 +70,13 @@ export const LinkPartnerScreen = () => {
             ? 'You are already linked with this partner.'
             : 'You and your partner are now linked!'
         );
-        await refreshPartnership();
+        const partnership = await refreshPartnership(result);
+        if (!partnership) {
+          Alert.alert(
+            'Almost There',
+            'Linking succeeded, but your partner data is still syncing. Please wait a few seconds or reopen the app.'
+          );
+        }
       } else {
         Alert.alert('Error', result.error || 'Failed to link with partner');
       }
@@ -135,6 +142,10 @@ export const LinkPartnerScreen = () => {
           onChangeText={formatCodeInput}
           autoCapitalize="characters"
           maxLength={9}
+          returnKeyType="done"
+          blurOnSubmit
+          onSubmitEditing={handleLinkPartner}
+          inputAccessoryViewID={Platform.OS === 'ios' ? linkCodeInputAccessoryViewId : undefined}
         />
         <Button
           title="🔗 Link Partner"
@@ -155,6 +166,14 @@ export const LinkPartnerScreen = () => {
         }}
         style={styles.logoutBtn}
       />
+
+      {Platform.OS === 'ios' && (
+        <InputAccessoryView nativeID={linkCodeInputAccessoryViewId}>
+          <View style={styles.inputAccessory}>
+            <Button title="Done" size="small" onPress={Keyboard.dismiss} />
+          </View>
+        </InputAccessoryView>
+      )}
     </Card>
   );
 };
@@ -196,5 +215,13 @@ const styles = StyleSheet.create({
   },
   logoutBtn: {
     marginTop: 20,
+  },
+  inputAccessory: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+    backgroundColor: '#F5F5F5',
+    alignItems: 'flex-end',
   },
 });

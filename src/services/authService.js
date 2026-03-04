@@ -40,8 +40,11 @@ export const authService = {
 
   async signOut() {
     console.log('[AUTH] signOut called');
-    const { error } = await supabase.auth.signOut();
-    if (error) throw error;
+    // Use local scope so logout works even when network is flaky.
+    const { error } = await supabase.auth.signOut({ scope: 'local' });
+    if (error && !/auth session missing/i.test(error.message || '')) {
+      throw error;
+    }
   },
 
   async resetPassword(email) {

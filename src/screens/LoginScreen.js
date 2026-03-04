@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Alert } from 'react-native';
+import { View, Text, StyleSheet, Alert, Keyboard, Platform, InputAccessoryView } from 'react-native';
 import { authService } from '../services/authService';
 import { Card, Heading, Subheading, Input, Button, colors } from '../components/ui';
 
@@ -8,6 +8,7 @@ export const LoginScreen = ({ onNavigate }) => {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [resetMode, setResetMode] = useState(false);
+  const loginInputAccessoryViewId = 'login-input-accessory';
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -15,6 +16,7 @@ export const LoginScreen = ({ onNavigate }) => {
       return;
     }
 
+    Keyboard.dismiss();
     setLoading(true);
     try {
       await authService.signIn(email.trim(), password);
@@ -32,6 +34,7 @@ export const LoginScreen = ({ onNavigate }) => {
       return;
     }
 
+    Keyboard.dismiss();
     setLoading(true);
     try {
       await authService.resetPassword(email.trim());
@@ -59,6 +62,10 @@ export const LoginScreen = ({ onNavigate }) => {
           onChangeText={setEmail}
           keyboardType="email-address"
           autoCapitalize="none"
+          returnKeyType="done"
+          blurOnSubmit
+          onSubmitEditing={handleResetPassword}
+          inputAccessoryViewID={Platform.OS === 'ios' ? loginInputAccessoryViewId : undefined}
         />
 
         <Button
@@ -66,6 +73,14 @@ export const LoginScreen = ({ onNavigate }) => {
           onPress={handleResetPassword}
           loading={loading}
         />
+
+        {Platform.OS === 'ios' && (
+          <InputAccessoryView nativeID={loginInputAccessoryViewId}>
+            <View style={styles.inputAccessory}>
+              <Button title="Done" size="small" onPress={Keyboard.dismiss} />
+            </View>
+          </InputAccessoryView>
+        )}
 
         <Button
           title="← Back to Login"
@@ -88,6 +103,10 @@ export const LoginScreen = ({ onNavigate }) => {
         onChangeText={setEmail}
         keyboardType="email-address"
         autoCapitalize="none"
+        returnKeyType="done"
+        blurOnSubmit
+        onSubmitEditing={Keyboard.dismiss}
+        inputAccessoryViewID={Platform.OS === 'ios' ? loginInputAccessoryViewId : undefined}
       />
 
       <Input
@@ -95,6 +114,10 @@ export const LoginScreen = ({ onNavigate }) => {
         value={password}
         onChangeText={setPassword}
         secureTextEntry
+        returnKeyType="done"
+        blurOnSubmit
+        onSubmitEditing={handleLogin}
+        inputAccessoryViewID={Platform.OS === 'ios' ? loginInputAccessoryViewId : undefined}
       />
 
       <Button
@@ -118,6 +141,14 @@ export const LoginScreen = ({ onNavigate }) => {
           onPress={() => onNavigate('signup')}
         />
       </View>
+
+      {Platform.OS === 'ios' && (
+        <InputAccessoryView nativeID={loginInputAccessoryViewId}>
+          <View style={styles.inputAccessory}>
+            <Button title="Done" size="small" onPress={Keyboard.dismiss} />
+          </View>
+        </InputAccessoryView>
+      )}
     </Card>
   );
 };
@@ -136,5 +167,13 @@ const styles = StyleSheet.create({
   footerText: {
     color: colors.textLight,
     marginBottom: 10,
+  },
+  inputAccessory: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+    backgroundColor: '#F5F5F5',
+    alignItems: 'flex-end',
   },
 });

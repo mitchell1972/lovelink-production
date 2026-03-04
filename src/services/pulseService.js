@@ -1,4 +1,5 @@
 import { supabase } from '../config/supabase';
+import { withServiceTimeout } from './serviceTimeout';
 
 export const pulseService = {
   async sendPulse(partnershipId, senderId) {
@@ -25,13 +26,16 @@ export const pulseService = {
   async getMyPulses(partnershipId, userId) {
     console.log('[PULSE SERVICE] getMyPulses called');
 
-    const { data, error } = await supabase
-      .from('pulses')
-      .select('*')
-      .eq('partnership_id', partnershipId)
-      .eq('sender_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(10);
+    const { data, error } = await withServiceTimeout(
+      supabase
+        .from('pulses')
+        .select('*')
+        .eq('partnership_id', partnershipId)
+        .eq('sender_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(10),
+      'pulse.getMyPulses'
+    );
 
     if (error) {
       console.log('[PULSE SERVICE] ERROR fetching my pulses:', error);
@@ -44,16 +48,16 @@ export const pulseService = {
   async getReceivedPulses(partnershipId, userId) {
     console.log('[PULSE SERVICE] getReceivedPulses called');
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const { data, error } = await supabase
-      .from('pulses')
-      .select('*')
-      .eq('partnership_id', partnershipId)
-      .neq('sender_id', userId)
-      .gte('created_at', today.toISOString())
-      .order('created_at', { ascending: false });
+    const { data, error } = await withServiceTimeout(
+      supabase
+        .from('pulses')
+        .select('*')
+        .eq('partnership_id', partnershipId)
+        .neq('sender_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(10),
+      'pulse.getReceivedPulses'
+    );
 
     if (error) {
       console.log('[PULSE SERVICE] ERROR fetching received pulses:', error);

@@ -70,12 +70,13 @@ CREATE TABLE public.sessions (
   session_type TEXT NOT NULL CHECK (session_type IN ('mood', 'appreciation', 'microPlan', 'wins')),
   prompt TEXT NOT NULL,
   answer TEXT NOT NULL,
-  session_date DATE DEFAULT CURRENT_DATE,
+  session_date DATE NOT NULL DEFAULT CURRENT_DATE,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Index for fetching today's sessions
 CREATE INDEX idx_sessions_date ON public.sessions(partnership_id, session_date);
+CREATE UNIQUE INDEX idx_sessions_user_date_unique ON public.sessions(user_id, session_date);
 
 -- =============================================
 -- MOMENTS (PHOTOS) TABLE
@@ -168,9 +169,6 @@ CREATE POLICY "Users can delete own unused codes" ON public.partner_codes
 -- Partnerships policies
 CREATE POLICY "Users can view own partnerships" ON public.partnerships
   FOR SELECT USING (auth.uid() IN (user1_id, user2_id));
-
-CREATE POLICY "Users can create partnerships" ON public.partnerships
-  FOR INSERT WITH CHECK (auth.uid() IN (user1_id, user2_id));
 
 -- Sessions policies
 CREATE POLICY "Users can view partnership sessions" ON public.sessions
@@ -331,8 +329,125 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
+-- Function to regenerate own partner code and unlink active partnership (if any)
+CREATE OR REPLACE FUNCTION public.regenerate_partner_code()
+RETURNS JSON AS $$
+DECLARE
+  v_user_id UUID := auth.uid();
+  v_partnership_id UUID;
+  v_partner_id UUID;
+  v_new_code TEXT;
+  v_code_record RECORD;
+  v_unlinked BOOLEAN := false;
+BEGIN
+  IF v_user_id IS NULL THEN
+    RETURN json_build_object('success', false, 'error', 'Not authenticated');
+  END IF;
+
+  SELECT
+    p.id,
+    CASE
+      WHEN p.user1_id = v_user_id THEN p.user2_id
+      ELSE p.user1_id
+    END
+  INTO v_partnership_id, v_partner_id
+  FROM public.partnerships p
+  WHERE p.status = 'active'
+    AND (p.user1_id = v_user_id OR p.user2_id = v_user_id)
+  ORDER BY p.created_at DESC
+  LIMIT 1;
+
+  IF v_partnership_id IS NOT NULL AND v_partner_id IS NOT NULL THEN
+    -- Serialize operations that affect this couple's active relationship.
+    PERFORM pg_advisory_xact_lock(hashtextextended(LEAST(v_user_id, v_partner_id)::text, 0));
+    PERFORM pg_advisory_xact_lock(hashtextextended(GREATEST(v_user_id, v_partner_id)::text, 0));
+
+    UPDATE public.partnerships
+    SET status = 'ended'
+    WHERE id = v_partnership_id
+      AND status = 'active';
+
+    v_unlinked := FOUND;
+
+    UPDATE public.profiles
+    SET partner_id = NULL
+    WHERE id IN (v_user_id, v_partner_id);
+  END IF;
+
+  DELETE FROM public.partner_codes
+  WHERE user_id = v_user_id
+    AND used_at IS NULL;
+
+  v_new_code := public.generate_partner_code();
+
+  INSERT INTO public.partner_codes (user_id, code, expires_at)
+  VALUES (v_user_id, v_new_code, NOW() + INTERVAL '48 hours')
+  RETURNING
+    id,
+    user_id,
+    code,
+    expires_at
+  INTO v_code_record;
+
+  RETURN json_build_object(
+    'success', true,
+    'unlinked', v_unlinked,
+    'partnership_id', v_partnership_id,
+    'code', json_build_object(
+      'id', v_code_record.id,
+      'user_id', v_code_record.user_id,
+      'code', v_code_record.code,
+      'expires_at', v_code_record.expires_at
+    )
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+REVOKE ALL ON FUNCTION public.regenerate_partner_code() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.regenerate_partner_code() TO authenticated;
+
+-- Enforce one active partnership per user at DB level.
+CREATE OR REPLACE FUNCTION public.enforce_single_active_partnership()
+RETURNS trigger AS $$
+DECLARE
+  v_conflict_id UUID;
+BEGIN
+  IF NEW.status <> 'active' THEN
+    RETURN NEW;
+  END IF;
+
+  -- Serialize concurrent writes that may activate partnerships.
+  LOCK TABLE public.partnerships IN SHARE ROW EXCLUSIVE MODE;
+
+  SELECT p.id
+  INTO v_conflict_id
+  FROM public.partnerships p
+  WHERE p.status = 'active'
+    AND p.id <> COALESCE(NEW.id, '00000000-0000-0000-0000-000000000000'::uuid)
+    AND (
+      p.user1_id IN (NEW.user1_id, NEW.user2_id)
+      OR p.user2_id IN (NEW.user1_id, NEW.user2_id)
+    )
+  LIMIT 1;
+
+  IF v_conflict_id IS NOT NULL THEN
+    RAISE EXCEPTION 'A user can only be in one active partnership'
+      USING ERRCODE = '23514';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SET search_path = public;
+
+DROP TRIGGER IF EXISTS trg_enforce_single_active_partnership ON public.partnerships;
+CREATE TRIGGER trg_enforce_single_active_partnership
+  BEFORE INSERT OR UPDATE OF user1_id, user2_id, status
+  ON public.partnerships
+  FOR EACH ROW
+  EXECUTE FUNCTION public.enforce_single_active_partnership();
+
 -- Function to link partners
-CREATE OR REPLACE FUNCTION link_partners(p_code TEXT)
+CREATE OR REPLACE FUNCTION public.link_partners(p_code TEXT)
 RETURNS JSON AS $$
 DECLARE
   v_code_record RECORD;
@@ -344,34 +459,69 @@ DECLARE
   v_user_high UUID;
   v_was_existing BOOLEAN := false;
 BEGIN
-  -- Get the code record
   SELECT * INTO v_code_record
   FROM public.partner_codes
   WHERE code = UPPER(p_code)
     AND used_at IS NULL
     AND expires_at > NOW();
-  
+
   IF NOT FOUND THEN
     RETURN json_build_object('success', false, 'error', 'Invalid or expired code');
   END IF;
 
   v_target_user_id := v_code_record.user_id;
-  
+
   IF v_target_user_id = v_current_user_id THEN
     RETURN json_build_object('success', false, 'error', 'Cannot use your own code');
   END IF;
 
-  -- Store partnerships in canonical order to make (user1_id, user2_id)
-  -- an unambiguous unique key for the couple.
   v_user_low := LEAST(v_target_user_id, v_current_user_id);
   v_user_high := GREATEST(v_target_user_id, v_current_user_id);
 
-  -- Reuse an existing partnership if one already exists.
+  -- Deterministic advisory locks to serialize link attempts for both users.
+  PERFORM pg_advisory_xact_lock(hashtextextended(v_user_low::text, 0));
+  PERFORM pg_advisory_xact_lock(hashtextextended(v_user_high::text, 0));
+
+  -- If the current user is already linked with someone else, block.
+  IF EXISTS (
+    SELECT 1
+    FROM public.partnerships p
+    WHERE p.status = 'active'
+      AND (p.user1_id = v_current_user_id OR p.user2_id = v_current_user_id)
+      AND NOT (
+        (p.user1_id = v_user_low AND p.user2_id = v_user_high)
+        OR (p.user1_id = v_user_high AND p.user2_id = v_user_low)
+      )
+  ) THEN
+    RETURN json_build_object(
+      'success', false,
+      'error', 'You are already linked to another partner. Unlink first.'
+    );
+  END IF;
+
+  -- If the code owner is already linked with someone else, block.
+  IF EXISTS (
+    SELECT 1
+    FROM public.partnerships p
+    WHERE p.status = 'active'
+      AND (p.user1_id = v_target_user_id OR p.user2_id = v_target_user_id)
+      AND NOT (
+        (p.user1_id = v_user_low AND p.user2_id = v_user_high)
+        OR (p.user1_id = v_user_high AND p.user2_id = v_user_low)
+      )
+  ) THEN
+    RETURN json_build_object(
+      'success', false,
+      'error', 'This person is already linked to another partner.'
+    );
+  END IF;
+
   SELECT id, status
   INTO v_existing_partnership
   FROM public.partnerships
-  WHERE user1_id = v_user_low
-    AND user2_id = v_user_high
+  WHERE (user1_id = v_user_low AND user2_id = v_user_high)
+     OR (user1_id = v_user_high AND user2_id = v_user_low)
+  ORDER BY created_at DESC
   LIMIT 1;
 
   IF FOUND THEN
@@ -384,19 +534,18 @@ BEGIN
       WHERE id = v_partnership_id;
     END IF;
   ELSE
-    -- Conflict-safe insert for concurrent link attempts.
     INSERT INTO public.partnerships (user1_id, user2_id, status)
     VALUES (v_user_low, v_user_high, 'active')
     ON CONFLICT (user1_id, user2_id) DO NOTHING
     RETURNING id INTO v_partnership_id;
 
     IF v_partnership_id IS NULL THEN
-      -- Another request created this pair first. Reuse that row.
       SELECT id, status
       INTO v_existing_partnership
       FROM public.partnerships
-      WHERE user1_id = v_user_low
-        AND user2_id = v_user_high
+      WHERE (user1_id = v_user_low AND user2_id = v_user_high)
+         OR (user1_id = v_user_high AND user2_id = v_user_low)
+      ORDER BY created_at DESC
       LIMIT 1;
 
       IF FOUND THEN
@@ -413,18 +562,23 @@ BEGIN
       END IF;
     END IF;
   END IF;
-  
-  -- Mark code as used
+
   UPDATE public.partner_codes
   SET
     used_at = COALESCE(used_at, NOW()),
     used_by = COALESCE(used_by, v_current_user_id)
   WHERE id = v_code_record.id;
-  
-  -- Update both profiles with partner_id
+
+  -- Invalidate any other outstanding codes for either user after successful link.
+  UPDATE public.partner_codes
+  SET used_at = NOW()
+  WHERE used_at IS NULL
+    AND id <> v_code_record.id
+    AND user_id IN (v_current_user_id, v_target_user_id);
+
   UPDATE public.profiles SET partner_id = v_current_user_id WHERE id = v_code_record.user_id;
   UPDATE public.profiles SET partner_id = v_code_record.user_id WHERE id = v_current_user_id;
-  
+
   RETURN json_build_object(
     'success', true,
     'partnership_id', v_partnership_id,
@@ -432,7 +586,7 @@ BEGIN
     'already_linked', v_was_existing
   );
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 -- Function to delete the currently authenticated user's account and data
 CREATE OR REPLACE FUNCTION public.delete_user_account()

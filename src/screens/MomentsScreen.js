@@ -21,6 +21,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { momentsService } from '../services/momentsService';
 import { notificationService } from '../services/notificationService';
 import { checkMomentsLimit, getPremiumStatus } from '../services/premiumService';
+import { isServiceTimeoutError } from '../services/serviceTimeout';
+import { showAlert, showConfirm, showUpgradePrompt } from '../services/webAlert';
 
 const { width } = Dimensions.get('window');
 const imageSize = (width - 48) / 3;
@@ -34,11 +36,11 @@ export default function MomentsScreen({ onNavigate }) {
   const [refreshing, setRefreshing] = useState(false);
   const [limitInfo, setLimitInfo] = useState(null);
   const [isPremium, setIsPremium] = useState(false);
+  const [loadError, setLoadError] = useState('');
 
   useEffect(() => {
     loadMoments();
-    checkPremiumAndLimits();
-  }, []);
+  }, [user?.id, partnership?.id]);
 
   const checkPremiumAndLimits = async () => {
     if (!user) return;
@@ -52,28 +54,45 @@ export default function MomentsScreen({ onNavigate }) {
     }
   };
 
-  const loadMoments = async () => {
+  const loadMoments = async (showLoader = true) => {
+    if (showLoader) {
+      setLoading(true);
+    }
+
     if (!user || !partnership?.id) {
-      setLoading(false);
+      setMoments([]);
+      setLoadError('');
+      if (showLoader) {
+        setLoading(false);
+      }
       return;
     }
     
     try {
+      setLoadError('');
       const data = await momentsService.getMoments(partnership.id);
       setMoments(data || []);
-      await checkPremiumAndLimits();
+      checkPremiumAndLimits().catch((error) => {
+        console.error('Error checking premium after loading moments:', error);
+      });
     } catch (error) {
       console.error('Error loading moments:', error);
+      const message = isServiceTimeoutError(error)
+        ? 'Loading moments is taking too long. Please try again.'
+        : 'Failed to load moments. Please try again.';
+      setLoadError(message);
     } finally {
-      setLoading(false);
+      if (showLoader) {
+        setLoading(false);
+      }
     }
   };
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await loadMoments();
+    await loadMoments(false);
     setRefreshing(false);
-  }, [user, partnership]);
+  }, [user?.id, partnership?.id]);
 
   const handleBack = () => {
     onNavigate('home');
@@ -85,17 +104,13 @@ export default function MomentsScreen({ onNavigate }) {
       const limits = await checkMomentsLimit(user.id, partnership?.id || null);
       
       if (!limits.allowed) {
-        Alert.alert(
-          '📸 Photo Limit Reached',
-          'You\'ve reached the ' + limits.limit + ' photo limit on the free plan.\n\nUpgrade to Premium for unlimited photos!',
-          [
-            { text: 'Maybe Later', style: 'cancel' },
-            { 
-              text: '💎 Go Premium', 
-              onPress: () => onNavigate('premium')
-            },
-          ]
-        );
+        showUpgradePrompt({
+          title: '📸 Photo Limit Reached',
+          message: 'You\'ve reached the ' + limits.limit + ' photo limit on the free plan.\n\nUpgrade to Premium for unlimited photos!',
+          upgradeText: '💎 Go Premium',
+          cancelText: 'Maybe Later',
+          onUpgrade: () => onNavigate('premium'),
+        });
         return;
       }
 
@@ -103,10 +118,9 @@ export default function MomentsScreen({ onNavigate }) {
       if (!limits.isPremium && limits.limit !== Infinity) {
         const remaining = limits.limit - limits.current;
         if (remaining <= 3 && remaining > 0) {
-          Alert.alert(
+          showAlert(
             '📸 Almost at Limit',
-            'You have ' + remaining + ' photo' + (remaining === 1 ? '' : 's') + ' left on the free plan.',
-            [{ text: 'OK' }]
+            'You have ' + remaining + ' photo' + (remaining === 1 ? '' : 's') + ' left on the free plan.'
           );
         }
       }
@@ -115,6 +129,11 @@ export default function MomentsScreen({ onNavigate }) {
     }
 
     // Show choice: Camera or Gallery
+    if (Platform.OS === 'web') {
+      pickImage('gallery');
+      return;
+    }
+
     Alert.alert(
       'Add Moment',
       'Choose how to add your photo',
@@ -132,13 +151,13 @@ export default function MomentsScreen({ onNavigate }) {
     if (source === 'camera') {
       permissionResult = await ImagePicker.requestCameraPermissionsAsync();
       if (permissionResult.status !== 'granted') {
-        Alert.alert('Permission needed', 'Please allow camera access to take photos.');
+        showAlert('Permission needed', 'Please allow camera access to take photos.');
         return;
       }
     } else {
       permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (permissionResult.status !== 'granted') {
-        Alert.alert('Permission needed', 'Please allow photo access to add moments.');
+        showAlert('Permission needed', 'Please allow photo access to add moments.');
         return;
       }
     }
@@ -177,7 +196,7 @@ export default function MomentsScreen({ onNavigate }) {
         }
       } catch (error) {
         console.error('Upload error:', error);
-        Alert.alert('Error', 'Failed to upload photo. Please try again.');
+        showAlert('Error', 'Failed to upload photo. Please try again.');
       } finally {
         setUploading(false);
       }
@@ -207,31 +226,26 @@ export default function MomentsScreen({ onNavigate }) {
 
   const handleDeleteMoment = async (moment) => {
     if (moment.user_id !== user.id) {
-      Alert.alert('Cannot Delete', "You can only delete your own photos.");
+      showAlert('Cannot Delete', "You can only delete your own photos.");
       return;
     }
 
-    Alert.alert(
-      'Delete Moment',
-      'Are you sure you want to delete this photo?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await momentsService.deleteMoment(moment.id, moment.image_url);
-              setMoments(prev => prev.filter(m => m.id !== moment.id));
-              setSelectedMoment(null);
-              await checkPremiumAndLimits();
-            } catch (error) {
-              Alert.alert('Error', 'Failed to delete photo.');
-            }
-          },
-        },
-      ]
-    );
+    showConfirm({
+      title: 'Delete Moment',
+      message: 'Are you sure you want to delete this photo?',
+      confirmText: 'Delete',
+      destructive: true,
+      onConfirm: async () => {
+        try {
+          await momentsService.deleteMoment(moment.id, moment.image_url);
+          setMoments(prev => prev.filter(m => m.id !== moment.id));
+          setSelectedMoment(null);
+          await checkPremiumAndLimits();
+        } catch (error) {
+          showAlert('Error', 'Failed to delete photo.');
+        }
+      },
+    });
   };
 
   const renderMoment = ({ item }) => (
@@ -272,6 +286,14 @@ export default function MomentsScreen({ onNavigate }) {
       </TouchableOpacity>
     );
   };
+
+  const renderBackFooter = () => (
+    <View style={styles.listFooter}>
+      <TouchableOpacity style={styles.listFooterBackButton} onPress={handleBack}>
+        <Text style={styles.listFooterBackButtonText}>← Back</Text>
+      </TouchableOpacity>
+    </View>
+  );
 
   if (loading) {
     return (
@@ -317,6 +339,15 @@ export default function MomentsScreen({ onNavigate }) {
         renderLimitBanner()
       )}
 
+      {loadError ? (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorText}>{loadError}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={() => loadMoments()}>
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       {moments.length === 0 ? (
         <View style={styles.emptyContainer}>
           <Text style={styles.emptyIcon}>📷</Text>
@@ -324,6 +355,9 @@ export default function MomentsScreen({ onNavigate }) {
           <Text style={styles.emptySubtext}>
             Tap + to add your first photo together!
           </Text>
+          <TouchableOpacity style={styles.emptyBackBtn} onPress={handleBack}>
+            <Text style={styles.emptyBackText}>← Back</Text>
+          </TouchableOpacity>
         </View>
       ) : (
         <FlatList
@@ -332,6 +366,9 @@ export default function MomentsScreen({ onNavigate }) {
           keyExtractor={(item) => item.id}
           numColumns={3}
           contentContainerStyle={styles.grid}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          ListFooterComponent={renderBackFooter}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -424,6 +461,30 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     fontSize: 13,
   },
+  errorBanner: {
+    backgroundColor: 'rgba(255, 235, 238, 0.95)',
+    marginHorizontal: 16,
+    marginBottom: 12,
+    borderRadius: 8,
+    padding: 12,
+  },
+  errorText: {
+    color: '#B71C1C',
+    fontSize: 13,
+    marginBottom: 8,
+  },
+  retryButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#B71C1C',
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  retryButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
   limitBanner: {
     backgroundColor: 'rgba(255, 255, 255, 0.15)',
     marginHorizontal: 16,
@@ -505,6 +566,38 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: 'rgba(255,255,255,0.7)',
     textAlign: 'center',
+    marginBottom: 20,
+  },
+  emptyBackBtn: {
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.6)',
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 22,
+  },
+  emptyBackText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  listFooter: {
+    marginTop: 16,
+    marginBottom: 28,
+    paddingHorizontal: 4,
+  },
+  listFooterBackButton: {
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.6)',
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  listFooterBackButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
   noPartnerContainer: {
     flex: 1,

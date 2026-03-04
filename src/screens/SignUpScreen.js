@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Alert, Keyboard } from 'react-native';
+import { View, Alert, Keyboard, Platform, InputAccessoryView, StyleSheet } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
 import { Card, Heading, Subheading, Input, Button } from '../components/ui';
 
@@ -8,6 +8,7 @@ export const SignUpScreen = ({ onSwitchToLogin }) => {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const signUpInputAccessoryViewId = 'signup-input-accessory';
 
   const handleSignUp = async () => {
     if (!name.trim() || !email.trim() || !password.trim()) {
@@ -44,6 +45,10 @@ export const SignUpScreen = ({ onSwitchToLogin }) => {
         value={name}
         onChangeText={setName}
         autoCapitalize="words"
+        returnKeyType="done"
+        blurOnSubmit
+        onSubmitEditing={Keyboard.dismiss}
+        inputAccessoryViewID={Platform.OS === 'ios' ? signUpInputAccessoryViewId : undefined}
       />
 
       <Input
@@ -52,6 +57,10 @@ export const SignUpScreen = ({ onSwitchToLogin }) => {
         onChangeText={setEmail}
         keyboardType="email-address"
         autoCapitalize="none"
+        returnKeyType="done"
+        blurOnSubmit
+        onSubmitEditing={Keyboard.dismiss}
+        inputAccessoryViewID={Platform.OS === 'ios' ? signUpInputAccessoryViewId : undefined}
       />
 
       <Input
@@ -59,6 +68,10 @@ export const SignUpScreen = ({ onSwitchToLogin }) => {
         value={password}
         onChangeText={setPassword}
         secureTextEntry
+        returnKeyType="done"
+        blurOnSubmit
+        onSubmitEditing={handleSignUp}
+        inputAccessoryViewID={Platform.OS === 'ios' ? signUpInputAccessoryViewId : undefined}
       />
 
       <Button
@@ -72,6 +85,25 @@ export const SignUpScreen = ({ onSwitchToLogin }) => {
         variant="secondary"
         onPress={onSwitchToLogin}
       />
+
+      {Platform.OS === 'ios' && (
+        <InputAccessoryView nativeID={signUpInputAccessoryViewId}>
+          <View style={styles.inputAccessory}>
+            <Button title="Done" size="small" onPress={Keyboard.dismiss} />
+          </View>
+        </InputAccessoryView>
+      )}
     </Card>
   );
 };
+
+const styles = StyleSheet.create({
+  inputAccessory: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+    backgroundColor: '#F5F5F5',
+    alignItems: 'flex-end',
+  },
+});

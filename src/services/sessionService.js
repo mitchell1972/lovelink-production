@@ -75,6 +75,19 @@ export const sessionService = {
     const todayDate = getTodayDateString();
     console.log('[SESSION] Inserting session with date:', todayDate);
 
+    const existingToday = await this.getUserSessionByDate(
+      partnershipId,
+      userId,
+      todayDate
+    );
+
+    if (existingToday) {
+      const duplicateError = new Error('You already submitted your Daily Session for today.');
+      duplicateError.code = 'SESSION_ALREADY_SUBMITTED';
+      duplicateError.existing = existingToday;
+      throw duplicateError;
+    }
+
     const { data, error } = await supabase
       .from('sessions')
       .insert({
@@ -101,27 +114,64 @@ export const sessionService = {
     return this.getPartnerSessionByDate(partnershipId, partnerId, sessionType, getTodayDateString());
   },
 
-  async getPartnerSessionByDate(partnershipId, partnerId, sessionType, dateString) {
-    console.log('[SESSION] getPartnerSessionByDate called:', { partnershipId, partnerId, sessionType, dateString });
+  async getUserSessionByDate(partnershipId, userId, dateString, sessionType = null) {
+    console.log('[SESSION] getUserSessionByDate called:', { partnershipId, userId, sessionType, dateString });
 
-    const { data, error } = await supabase
-      .from('sessions')
-      .select('*')
-      .eq('partnership_id', partnershipId)
-      .eq('user_id', partnerId)
-      .eq('session_type', sessionType)
-      .eq('session_date', dateString)
-      .order('created_at', { ascending: false })
-      .limit(1);
+    const runLookup = async ({ constrainPartnership }) => {
+      let query = supabase
+        .from('sessions')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('session_date', dateString);
 
-    if (error) {
-      console.log('[SESSION] ERROR fetching partner session:', error);
-      throw error;
+      if (sessionType) {
+        query = query.eq('session_type', sessionType);
+      }
+
+      if (constrainPartnership && partnershipId) {
+        query = query.eq('partnership_id', partnershipId);
+      }
+
+      const { data, error } = await query
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .limit(20);
+
+      if (error) {
+        console.log('[SESSION] ERROR fetching user session rows:', error);
+        throw error;
+      }
+
+      const rows = Array.isArray(data) ? data : (data ? [data] : []);
+      return rows[0] || null;
+    };
+
+    // Primary path: session should belong to the currently loaded partnership.
+    const strict = await runLookup({ constrainPartnership: true });
+    if (strict) {
+      console.log('[SESSION] User session result (strict):', { id: strict.id, answer: strict.answer });
+      return strict;
     }
-    
-    const result = data && data.length > 0 ? data[0] : null;
-    console.log('[SESSION] Partner session result:', result ? { id: result.id, answer: result.answer } : 'No session found');
-    return result;
+
+    // Fallback for legacy data where duplicate active partnership rows exist and
+    // each user may have posted under a different partnership_id.
+    if (partnershipId) {
+      console.log('[SESSION] No strict user match; retrying without partnership_id filter');
+      const relaxed = await runLookup({ constrainPartnership: false });
+      if (relaxed) {
+        console.log('[SESSION] User session result (relaxed):', { id: relaxed.id, answer: relaxed.answer });
+      } else {
+        console.log('[SESSION] No user session found (strict or relaxed)');
+      }
+      return relaxed;
+    }
+
+    console.log('[SESSION] No user session found');
+    return null;
+  },
+
+  async getPartnerSessionByDate(partnershipId, partnerId, sessionType, dateString) {
+    return this.getUserSessionByDate(partnershipId, partnerId, dateString, sessionType);
   },
 
   subscribeToSessions(partnershipId, callback) {
@@ -139,6 +189,24 @@ export const sessionService = {
       })
       .subscribe((status) => {
         console.log('[SESSION] Subscription status:', status);
+      });
+  },
+
+  subscribeToUserSessions(userId, callback) {
+    console.log('[SESSION] Subscribing to sessions for user:', userId);
+    return supabase
+      .channel(`sessions:user:${userId}:${Date.now()}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'sessions',
+        filter: `user_id=eq.${userId}`,
+      }, (payload) => {
+        console.log('[SESSION] User real-time update received:', payload);
+        callback(payload);
+      })
+      .subscribe((status) => {
+        console.log('[SESSION] User subscription status:', status);
       });
   },
 };

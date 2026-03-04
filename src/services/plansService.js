@@ -1,4 +1,5 @@
 import { supabase } from '../config/supabase';
+import { withServiceTimeout } from './serviceTimeout';
 
 // Keep in sync with DB check constraints in supabase-schema.sql
 export const BUDGET_OPTIONS = ['Low', 'Medium', 'High'];
@@ -41,11 +42,14 @@ export const plansService = {
   async getPlans(partnershipId) {
     console.log('[PLANS SERVICE] getPlans called');
 
-    const { data, error } = await supabase
-      .from('plans')
-      .select('*')
-      .eq('partnership_id', partnershipId)
-      .order('created_at', { ascending: false });
+    const { data, error } = await withServiceTimeout(
+      supabase
+        .from('plans')
+        .select('*')
+        .eq('partnership_id', partnershipId)
+        .order('created_at', { ascending: false }),
+      'plans.getPlans'
+    );
 
     if (error) {
       console.log('[PLANS SERVICE] FETCH ERROR:', error);

@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { getTrialAccessStatus, TRIAL_GATED_FEATURES } from '../services/premiumService';
 import { Card, Heading, Subheading, Button, colors } from '../components/ui';
 
-export const HomeScreen = ({ onNavigate }) => {
+export const HomeScreen = ({ onNavigate, unreadIndicators = {} }) => {
   const { user, profile, partnership } = useAuth();
   const [trialStatus, setTrialStatus] = useState(null);
   const userName = profile?.name || user?.user_metadata?.name || 'there';
@@ -33,7 +33,7 @@ export const HomeScreen = ({ onNavigate }) => {
       id: 'session',
       emoji: '💭',
       title: 'Daily Session',
-      subtitle: 'Answer today\'s question together',
+      subtitle: 'Both of you answer one shared prompt each day',
       color: '#E8F5E9',
     },
     {
@@ -121,23 +121,39 @@ export const HomeScreen = ({ onNavigate }) => {
       {renderTrialBanner()}
 
       <View style={styles.features}>
-        {features.map((feature) => (
-          <TouchableOpacity
-            key={feature.id}
-            style={[styles.featureCard, { backgroundColor: feature.color }]}
-            onPress={() => handleFeaturePress(feature.id)}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.featureEmoji}>{feature.emoji}</Text>
-            <View style={styles.featureText}>
-              <Text style={styles.featureTitle}>{feature.title}</Text>
-              <Text style={styles.featureSubtitle}>
-                {isFeatureLocked(feature.id) ? 'Locked - Premium required' : feature.subtitle}
+        {features.map((feature) => {
+          const hasUnread = !!unreadIndicators[feature.id];
+          return (
+            <TouchableOpacity
+              key={feature.id}
+              style={[styles.featureCard, { backgroundColor: feature.color }]}
+              onPress={() => handleFeaturePress(feature.id)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.featureEmoji}>{feature.emoji}</Text>
+              <View style={styles.featureText}>
+                <View style={styles.featureTitleRow}>
+                  <Text style={styles.featureTitle}>{feature.title}</Text>
+                  {hasUnread && (
+                    <View style={styles.newBadge}>
+                      <Text style={styles.newBadgeText}>New</Text>
+                    </View>
+                  )}
+                </View>
+                <Text style={styles.featureSubtitle}>
+                  {isFeatureLocked(feature.id)
+                    ? 'Locked - Premium required'
+                    : hasUnread
+                      ? `New from ${partnerName}`
+                      : feature.subtitle}
+                </Text>
+              </View>
+              <Text style={styles.arrow}>
+                {isFeatureLocked(feature.id) ? '🔒' : hasUnread ? '🔔' : '→'}
               </Text>
-            </View>
-            <Text style={styles.arrow}>{isFeatureLocked(feature.id) ? '🔒' : '→'}</Text>
-          </TouchableOpacity>
-        ))}
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
       <Button
@@ -183,10 +199,26 @@ const styles = StyleSheet.create({
   featureText: {
     flex: 1,
   },
+  featureTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   featureTitle: {
     fontSize: 16,
     fontWeight: '600',
     color: '#333',
+  },
+  newBadge: {
+    backgroundColor: '#FF6F61',
+    borderRadius: 999,
+    marginLeft: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  newBadgeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '700',
   },
   featureSubtitle: {
     fontSize: 12,

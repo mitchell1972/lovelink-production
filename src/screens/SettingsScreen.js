@@ -1,24 +1,28 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, StyleSheet, Alert, Linking } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, Alert, Linking, Switch, Keyboard, Platform, InputAccessoryView } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../config/supabase';
 import { partnerService } from '../services/partnerService';
+import { inAppAlertsService } from '../services/inAppAlertsService';
 import { Card, Heading, Subheading, Input, Button, colors } from '../components/ui';
 
 export const SettingsScreen = ({ onNavigate }) => {
-  const { user, partnership, signOut } = useAuth();
+  const { user, partnership, signOut, refreshPartnership } = useAuth();
   const [name, setName] = useState(user?.user_metadata?.name || '');
   const [loading, setLoading] = useState(false);
   const [linkCode, setLinkCode] = useState(null);
   const [loadingCode, setLoadingCode] = useState(false);
+  const [vibrationEnabled, setVibrationEnabled] = useState(true);
+  const settingsInputAccessoryViewId = 'settings-input-accessory';
 
   // Load link code for all users
   useEffect(() => {
     if (user?.id) {
       loadLinkCode();
+      loadAlertPreferences();
     }
-  }, [user]);
+  }, [user?.id]);
 
   const loadLinkCode = async () => {
     setLoadingCode(true);
@@ -32,10 +36,31 @@ export const SettingsScreen = ({ onNavigate }) => {
     }
   };
 
+  const loadAlertPreferences = async () => {
+    try {
+      const enabled = await inAppAlertsService.getVibrationEnabled(user.id);
+      setVibrationEnabled(enabled);
+    } catch (err) {
+      console.error('Error loading alert preferences:', err);
+    }
+  };
+
+  const handleToggleVibration = async (enabled) => {
+    setVibrationEnabled(enabled);
+    try {
+      await inAppAlertsService.setVibrationEnabled(user.id, enabled);
+    } catch (err) {
+      console.error('Error saving vibration preference:', err);
+      Alert.alert('Error', 'Could not save vibration preference.');
+    }
+  };
+
   const regenerateCode = () => {
     Alert.alert(
       '🔄 Generate New Code?',
-      'This will invalidate your current code. If you already shared it with your partner, they will need the new code instead.',
+      partnership
+        ? 'This will break your current partnership and generate a fresh code. Your partner will be unlinked.'
+        : 'This will invalidate your current code. If you already shared it, they will need the new code instead.',
       [
         { text: 'Cancel', style: 'cancel' },
         { 
@@ -45,7 +70,12 @@ export const SettingsScreen = ({ onNavigate }) => {
             try {
               const newCode = await partnerService.generateCode(user.id);
               setLinkCode(newCode);
-              Alert.alert('Success ✅', 'New code generated! Share it with your partner.');
+              if (newCode?.unlinked) {
+                await refreshPartnership();
+                Alert.alert('Success ✅', 'New code generated and previous partnership disconnected.');
+              } else {
+                Alert.alert('Success ✅', 'New code generated! Share it with your partner.');
+              }
             } catch (err) {
               console.error('Error generating code:', err);
               Alert.alert('Error', 'Failed to generate new code');
@@ -107,10 +137,9 @@ export const SettingsScreen = ({ onNavigate }) => {
           text: 'Logout', 
           style: 'destructive',
           onPress: async () => {
-            try {
-              await signOut();
-            } catch (err) {
-              Alert.alert('Error', 'Failed to logout');
+            const result = await signOut();
+            if (!result?.success) {
+              Alert.alert('Logged out locally', 'Your session was cleared on this device.');
             }
           }
         },
@@ -173,7 +202,11 @@ export const SettingsScreen = ({ onNavigate }) => {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <ScrollView
+      contentContainerStyle={styles.container}
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
+    >
       <Card>
         <Heading>Settings</Heading>
         <Subheading>Manage your account</Subheading>
@@ -189,6 +222,10 @@ export const SettingsScreen = ({ onNavigate }) => {
             value={name}
             onChangeText={setName}
             placeholder="Your name"
+            returnKeyType="done"
+            blurOnSubmit
+            onSubmitEditing={Keyboard.dismiss}
+            inputAccessoryViewID={Platform.OS === 'ios' ? settingsInputAccessoryViewId : undefined}
           />
           <Button 
             title="Update Name" 
@@ -263,6 +300,23 @@ export const SettingsScreen = ({ onNavigate }) => {
           />
         </View>
 
+        {/* Alerts Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>🔔 Alerts</Text>
+          <View style={styles.toggleRow}>
+            <View style={styles.toggleTextWrap}>
+              <Text style={styles.toggleLabel}>Vibrate for incoming activity</Text>
+              <Text style={styles.toggleHint}>Daily Session, Moments, Pulse, and Plans</Text>
+            </View>
+            <Switch
+              value={vibrationEnabled}
+              onValueChange={handleToggleVibration}
+              trackColor={{ false: '#ddd', true: colors.primary }}
+              thumbColor={vibrationEnabled ? '#fff' : '#f4f3f4'}
+            />
+          </View>
+        </View>
+
         {/* Account Actions */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>⚙️ Account</Text>
@@ -290,6 +344,14 @@ export const SettingsScreen = ({ onNavigate }) => {
           onPress={() => onNavigate('home')} 
           style={styles.backBtn}
         />
+
+        {Platform.OS === 'ios' && (
+          <InputAccessoryView nativeID={settingsInputAccessoryViewId}>
+            <View style={styles.inputAccessory}>
+              <Button title="Done" size="small" onPress={Keyboard.dismiss} />
+            </View>
+          </InputAccessoryView>
+        )}
       </Card>
     </ScrollView>
   );
@@ -340,6 +402,25 @@ const styles = StyleSheet.create({
   actionBtn: {
     marginBottom: 10,
   },
+  toggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  toggleTextWrap: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  toggleLabel: {
+    fontSize: 14,
+    color: '#333',
+    fontWeight: '600',
+  },
+  toggleHint: {
+    marginTop: 4,
+    fontSize: 12,
+    color: '#666',
+  },
   version: {
     alignItems: 'center',
     marginVertical: 15,
@@ -379,5 +460,13 @@ const styles = StyleSheet.create({
     color: '#999',
     marginTop: 8,
     fontStyle: 'italic',
+  },
+  inputAccessory: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+    backgroundColor: '#F5F5F5',
+    alignItems: 'flex-end',
   },
 });
