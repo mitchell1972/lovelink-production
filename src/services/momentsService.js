@@ -11,13 +11,16 @@ export const momentsService = {
       encoding: 'base64',
     });
 
-    const fileExt = imageUri.split('.').pop() || 'jpg';
+    const rawExt = (imageUri.split('.').pop() || 'jpg').split(/[?#]/)[0].toLowerCase();
+    const MIME_MAP = { jpg: 'jpeg', jpeg: 'jpeg', png: 'png', gif: 'gif', webp: 'webp', heic: 'heic' };
+    const fileExt = MIME_MAP[rawExt] ? rawExt : 'jpg';
+    const mimeType = `image/${MIME_MAP[fileExt] || 'jpeg'}`;
     const fileName = `${userId}/${Date.now()}.${fileExt}`;
 
     const { error: uploadError } = await supabase.storage
       .from('moments')
       .upload(fileName, decode(base64), {
-        contentType: `image/${fileExt}`,
+        contentType: mimeType,
       });
 
     if (uploadError) {
@@ -89,7 +92,7 @@ export const momentsService = {
 
     // Try to delete from storage (don't fail if this doesn't work)
     try {
-      const urlParts = imageUrl.split('/');
+      const urlParts = imageUrl.split('?')[0].split('/');
       const filePath = urlParts.slice(-2).join('/');
       await supabase.storage.from('moments').remove([filePath]);
       console.log('[MOMENTS SERVICE] Storage delete successful');

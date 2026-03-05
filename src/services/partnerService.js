@@ -30,6 +30,23 @@ export const partnerService = {
       throw regenerateError;
     }
 
+    // Safety guard: do not allow "generate new code" to proceed for linked
+    // users when the secure unlink-and-regenerate RPC is unavailable.
+    let activePartnership = null;
+    try {
+      activePartnership = await this.getPartnership(userId);
+    } catch (partnershipLookupError) {
+      throw new Error(
+        'Could not verify your partnership state. Please try again.'
+      );
+    }
+
+    if (activePartnership?.id) {
+      throw new Error(
+        'For safety, this environment must install the unlink migration before generating a new code while linked. Run migrations/regenerate-code-unlinks-partnership.sql in Supabase, then try again.'
+      );
+    }
+
     // Backward-compatible fallback for DBs that don't have the RPC yet.
     const { error: invalidateError } = await supabase
       .from('partner_codes')
@@ -57,7 +74,10 @@ export const partnerService = {
       .single();
 
     if (error) throw error;
-    return data;
+    return {
+      ...data,
+      unlinked: false,
+    };
   },
 
   /**
@@ -150,7 +170,26 @@ export const partnerService = {
       p_code: normalizedCode,
     });
 
-    if (!error) return data;
+    if (!error) {
+      if (data?.success && (!data?.partner_id || !data?.partnership_id)) {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (user?.id) {
+          const currentPartnership = await this.getPartnership(user.id);
+          if (currentPartnership?.id) {
+            return {
+              ...data,
+              partnership_id: data.partnership_id || currentPartnership.id,
+              partner_id: data.partner_id || currentPartnership.partner?.id || null,
+            };
+          }
+        }
+      }
+
+      return data;
+    }
 
     const message = (error.message || '').toLowerCase();
     const isAlreadyLinkedConstraint =
@@ -208,7 +247,7 @@ export const partnerService = {
       .order('created_at', { ascending: false });
 
     if (lookupError) {
-      throw error;
+      throw lookupError;
     }
 
     const allRows = Array.isArray(rows) ? rows : [];

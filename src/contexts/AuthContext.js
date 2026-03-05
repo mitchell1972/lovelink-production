@@ -1,9 +1,8 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { authService } from '../services/authService';
 import { profileService } from '../services/profileService';
 import { partnerService } from '../services/partnerService';
 import { notificationService } from '../services/notificationService';
-import { supabase } from '../config/supabase';
 
 const AuthContext = createContext({});
 
@@ -15,6 +14,8 @@ export const AuthProvider = ({ children }) => {
   const [partnership, setPartnership] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const initialLoadDoneRef = useRef(false);
+  const loadingUserDataRef = useRef(false);
 
   // Initialize auth state
   useEffect(() => {
@@ -23,10 +24,22 @@ export const AuthProvider = ({ children }) => {
     // Listen for auth changes
     const { data: authListener } = authService.onAuthStateChange(
       async (event, session) => {
+        if (event === 'TOKEN_REFRESHED') {
+          // Token refresh — update user object but do NOT reload partnership.
+          if (session?.user) setUser(session.user);
+          return;
+        }
         if (event === 'SIGNED_IN' && session?.user) {
           setUser(session.user);
-          await loadUserData(session.user.id);
+          // Only do a full data load on the initial sign-in, not on
+          // subsequent SIGNED_IN events that Supabase fires after token
+          // rehydration from storage. Also skip if checkUser is already
+          // running loadUserData to avoid parallel calls.
+          if (!initialLoadDoneRef.current && !loadingUserDataRef.current) {
+            await loadUserData(session.user.id);
+          }
         } else if (event === 'SIGNED_OUT') {
+          initialLoadDoneRef.current = false;
           setUser(null);
           setProfile(null);
           setPartnership(null);
@@ -55,6 +68,8 @@ export const AuthProvider = ({ children }) => {
   };
 
   const loadUserData = async (userId) => {
+    if (loadingUserDataRef.current) return;
+    loadingUserDataRef.current = true;
     try {
       // Load profile
       const userProfile = await profileService.getProfile(userId);
@@ -62,7 +77,15 @@ export const AuthProvider = ({ children }) => {
 
       // Load partnership if exists
       const userPartnership = await partnerService.getPartnership(userId);
-      setPartnership(userPartnership);
+      // Never overwrite an existing partnership with null — treat a null
+      // DB read as a transient failure when we already have state.
+      if (userPartnership) {
+        setPartnership(userPartnership);
+      } else {
+        setPartnership((current) => current ?? null);
+      }
+
+      initialLoadDoneRef.current = true;
 
       // Best-effort: register push notifications without blocking auth flow.
       notificationService
@@ -72,6 +95,8 @@ export const AuthProvider = ({ children }) => {
         });
     } catch (err) {
       console.error('Error loading user data:', err);
+    } finally {
+      loadingUserDataRef.current = false;
     }
   };
 
@@ -123,24 +148,41 @@ export const AuthProvider = ({ children }) => {
 
   const refreshPartnership = async (linkResult = null) => {
     if (!user) return;
-    try {
-      const userPartnership = await partnerService.getPartnership(user.id);
-      if (userPartnership) {
-        setPartnership(userPartnership);
-        return userPartnership;
-      }
+    const hasLinkHint =
+      !!(linkResult?.success && linkResult?.partnership_id && linkResult?.partner_id);
 
-      // Fallback: immediately mark the user as paired from a successful link
-      // result, even if the subsequent read is temporarily stale.
-      if (linkResult?.success && linkResult?.partnership_id && linkResult?.partner_id) {
-        const optimistic = {
+    const optimistic = hasLinkHint
+      ? {
           id: linkResult.partnership_id,
           user1_id: user.id,
           user2_id: linkResult.partner_id,
           status: 'active',
           partner: { id: linkResult.partner_id, name: 'Partner', avatar_url: null },
-        };
-        setPartnership(optimistic);
+        }
+      : null;
+
+    // Switch out of link screen immediately after a successful link response.
+    if (optimistic) {
+      setPartnership(optimistic);
+    }
+
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const attempts = hasLinkHint ? 5 : 1;
+
+    try {
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        const userPartnership = await partnerService.getPartnership(user.id);
+        if (userPartnership) {
+          setPartnership(userPartnership);
+          return userPartnership;
+        }
+
+        if (attempt < attempts - 1) {
+          await wait(400 * (attempt + 1));
+        }
+      }
+
+      if (optimistic) {
         return optimistic;
       }
 
@@ -148,15 +190,7 @@ export const AuthProvider = ({ children }) => {
       return null;
     } catch (err) {
       console.error('Error refreshing partnership:', err);
-      if (linkResult?.success && linkResult?.partnership_id && linkResult?.partner_id) {
-        const optimistic = {
-          id: linkResult.partnership_id,
-          user1_id: user.id,
-          user2_id: linkResult.partner_id,
-          status: 'active',
-          partner: { id: linkResult.partner_id, name: 'Partner', avatar_url: null },
-        };
-        setPartnership(optimistic);
+      if (optimistic) {
         return optimistic;
       }
       return null;

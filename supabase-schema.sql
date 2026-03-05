@@ -173,32 +173,48 @@ CREATE POLICY "Users can view own partnerships" ON public.partnerships
 -- Sessions policies
 CREATE POLICY "Users can view partnership sessions" ON public.sessions
   FOR SELECT USING (
-    partnership_id IN (
-      SELECT id FROM public.partnerships WHERE auth.uid() IN (user1_id, user2_id)
+    EXISTS (
+      SELECT 1
+      FROM public.partnerships p
+      WHERE p.id = sessions.partnership_id
+        AND p.status = 'active'
+        AND auth.uid() IN (p.user1_id, p.user2_id)
     )
   );
 
 CREATE POLICY "Users can create own sessions" ON public.sessions
   FOR INSERT WITH CHECK (
     auth.uid() = user_id AND
-    partnership_id IN (
-      SELECT id FROM public.partnerships WHERE auth.uid() IN (user1_id, user2_id)
+    EXISTS (
+      SELECT 1
+      FROM public.partnerships p
+      WHERE p.id = sessions.partnership_id
+        AND p.status = 'active'
+        AND auth.uid() IN (p.user1_id, p.user2_id)
     )
   );
 
 -- Moments policies
 CREATE POLICY "Users can view partnership moments" ON public.moments
   FOR SELECT USING (
-    partnership_id IN (
-      SELECT id FROM public.partnerships WHERE auth.uid() IN (user1_id, user2_id)
+    EXISTS (
+      SELECT 1
+      FROM public.partnerships p
+      WHERE p.id = moments.partnership_id
+        AND p.status = 'active'
+        AND auth.uid() IN (p.user1_id, p.user2_id)
     )
   );
 
 CREATE POLICY "Users can create moments" ON public.moments
   FOR INSERT WITH CHECK (
     auth.uid() = user_id AND
-    partnership_id IN (
-      SELECT id FROM public.partnerships WHERE auth.uid() IN (user1_id, user2_id)
+    EXISTS (
+      SELECT 1
+      FROM public.partnerships p
+      WHERE p.id = moments.partnership_id
+        AND p.status = 'active'
+        AND auth.uid() IN (p.user1_id, p.user2_id)
     )
   );
 
@@ -208,54 +224,93 @@ CREATE POLICY "Users can delete own moments" ON public.moments
 -- Plans policies
 CREATE POLICY "Users can view partnership plans" ON public.plans
   FOR SELECT USING (
-    partnership_id IN (
-      SELECT id FROM public.partnerships WHERE auth.uid() IN (user1_id, user2_id)
+    EXISTS (
+      SELECT 1
+      FROM public.partnerships p
+      WHERE p.id = plans.partnership_id
+        AND p.status = 'active'
+        AND auth.uid() IN (p.user1_id, p.user2_id)
     )
   );
 
 CREATE POLICY "Users can create plans" ON public.plans
   FOR INSERT WITH CHECK (
     auth.uid() = created_by AND
-    partnership_id IN (
-      SELECT id FROM public.partnerships WHERE auth.uid() IN (user1_id, user2_id)
+    EXISTS (
+      SELECT 1
+      FROM public.partnerships p
+      WHERE p.id = plans.partnership_id
+        AND p.status = 'active'
+        AND auth.uid() IN (p.user1_id, p.user2_id)
     )
   );
 
 CREATE POLICY "Users can update partnership plans" ON public.plans
   FOR UPDATE USING (
-    partnership_id IN (
-      SELECT id FROM public.partnerships WHERE auth.uid() IN (user1_id, user2_id)
+    EXISTS (
+      SELECT 1
+      FROM public.partnerships p
+      WHERE p.id = plans.partnership_id
+        AND p.status = 'active'
+        AND auth.uid() IN (p.user1_id, p.user2_id)
+    )
+  );
+
+CREATE POLICY "Users can delete partnership plans" ON public.plans
+  FOR DELETE USING (
+    EXISTS (
+      SELECT 1
+      FROM public.partnerships p
+      WHERE p.id = plans.partnership_id
+        AND p.status = 'active'
+        AND auth.uid() IN (p.user1_id, p.user2_id)
     )
   );
 
 -- Pulses policies
 CREATE POLICY "Users can view partnership pulses" ON public.pulses
   FOR SELECT USING (
-    partnership_id IN (
-      SELECT id FROM public.partnerships WHERE auth.uid() IN (user1_id, user2_id)
+    EXISTS (
+      SELECT 1
+      FROM public.partnerships p
+      WHERE p.id = pulses.partnership_id
+        AND p.status = 'active'
+        AND auth.uid() IN (p.user1_id, p.user2_id)
     )
   );
 
 CREATE POLICY "Users can send pulses" ON public.pulses
   FOR INSERT WITH CHECK (
     auth.uid() = sender_id AND
-    partnership_id IN (
-      SELECT id FROM public.partnerships WHERE auth.uid() IN (user1_id, user2_id)
+    EXISTS (
+      SELECT 1
+      FROM public.partnerships p
+      WHERE p.id = pulses.partnership_id
+        AND p.status = 'active'
+        AND auth.uid() IN (p.user1_id, p.user2_id)
     )
   );
 
 CREATE POLICY "Users can update pulse received status" ON public.pulses
   FOR UPDATE USING (
-    partnership_id IN (
-      SELECT id FROM public.partnerships WHERE auth.uid() IN (user1_id, user2_id)
+    EXISTS (
+      SELECT 1
+      FROM public.partnerships p
+      WHERE p.id = pulses.partnership_id
+        AND p.status = 'active'
+        AND auth.uid() IN (p.user1_id, p.user2_id)
     )
   );
 
 CREATE POLICY "Users can delete own pulses" ON public.pulses
   FOR DELETE USING (
     auth.uid() = sender_id AND
-    partnership_id IN (
-      SELECT id FROM public.partnerships WHERE auth.uid() IN (user1_id, user2_id)
+    EXISTS (
+      SELECT 1
+      FROM public.partnerships p
+      WHERE p.id = pulses.partnership_id
+        AND p.status = 'active'
+        AND auth.uid() IN (p.user1_id, p.user2_id)
     )
   );
 
@@ -336,6 +391,7 @@ DECLARE
   v_user_id UUID := auth.uid();
   v_partnership_id UUID;
   v_partner_id UUID;
+  v_disconnected_partner_ids UUID[];
   v_new_code TEXT;
   v_code_record RECORD;
   v_unlinked BOOLEAN := false;
@@ -357,21 +413,52 @@ BEGIN
   ORDER BY p.created_at DESC
   LIMIT 1;
 
-  IF v_partnership_id IS NOT NULL AND v_partner_id IS NOT NULL THEN
-    -- Serialize operations that affect this couple's active relationship.
-    PERFORM pg_advisory_xact_lock(hashtextextended(LEAST(v_user_id, v_partner_id)::text, 0));
-    PERFORM pg_advisory_xact_lock(hashtextextended(GREATEST(v_user_id, v_partner_id)::text, 0));
+  IF v_partnership_id IS NOT NULL THEN
+    -- Serialize partnership regeneration to avoid races.
+    LOCK TABLE public.partnerships IN SHARE ROW EXCLUSIVE MODE;
 
-    UPDATE public.partnerships
-    SET status = 'ended'
-    WHERE id = v_partnership_id
-      AND status = 'active';
+    SELECT ARRAY_AGG(DISTINCT ended.partner_id)
+    INTO v_disconnected_partner_ids
+    FROM (
+      UPDATE public.partnerships p
+      SET status = 'ended'
+      WHERE p.status = 'active'
+        AND (p.user1_id = v_user_id OR p.user2_id = v_user_id)
+      RETURNING CASE
+        WHEN p.user1_id = v_user_id THEN p.user2_id
+        ELSE p.user1_id
+      END AS partner_id
+    ) ended;
 
-    v_unlinked := FOUND;
+    v_unlinked := COALESCE(array_length(v_disconnected_partner_ids, 1), 0) > 0;
 
     UPDATE public.profiles
     SET partner_id = NULL
-    WHERE id IN (v_user_id, v_partner_id);
+    WHERE id = v_user_id
+      OR id = ANY(COALESCE(v_disconnected_partner_ids, ARRAY[]::UUID[]))
+      OR partner_id = v_user_id;
+
+    -- Revoke cross-shared premium access when this couple disconnects.
+    -- A real payer keeps their own premium (premium_granted_by is NULL),
+    -- while the recipient of shared premium loses access.
+    UPDATE public.profiles
+    SET
+      is_premium = FALSE,
+      premium_plan = NULL,
+      premium_since = NULL,
+      premium_expires = NULL,
+      iap_transaction_id = NULL,
+      iap_product_id = NULL,
+      premium_granted_by = NULL,
+      updated_at = NOW()
+    WHERE (
+      id = v_user_id
+      OR id = ANY(COALESCE(v_disconnected_partner_ids, ARRAY[]::UUID[]))
+    )
+      AND (
+        premium_granted_by = v_user_id
+        OR premium_granted_by = ANY(COALESCE(v_disconnected_partner_ids, ARRAY[]::UUID[]))
+      );
   END IF;
 
   DELETE FROM public.partner_codes

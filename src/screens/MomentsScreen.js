@@ -28,7 +28,7 @@ const { width } = Dimensions.get('window');
 const imageSize = (width - 48) / 3;
 
 export default function MomentsScreen({ onNavigate }) {
-  const { user, profile, partnership } = useAuth();
+  const { user, profile, partnership, refreshPartnership } = useAuth();
   const [moments, setMoments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -90,8 +90,11 @@ export default function MomentsScreen({ onNavigate }) {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await loadMoments(false);
-    setRefreshing(false);
+    try {
+      await loadMoments(false);
+    } finally {
+      setRefreshing(false);
+    }
   }, [user?.id, partnership?.id]);
 
   const handleBack = () => {
@@ -99,9 +102,18 @@ export default function MomentsScreen({ onNavigate }) {
   };
 
   const handleAddMoment = async () => {
+    const activePartnership = await refreshPartnership();
+    if (!activePartnership?.id) {
+      showAlert(
+        'Partner Changed',
+        'Your previous connection is no longer active. Enter a partner code to reconnect.'
+      );
+      return;
+    }
+
     // Check limits first
     try {
-      const limits = await checkMomentsLimit(user.id, partnership?.id || null);
+      const limits = await checkMomentsLimit(user.id, activePartnership.id);
       
       if (!limits.allowed) {
         showUpgradePrompt({
@@ -130,7 +142,7 @@ export default function MomentsScreen({ onNavigate }) {
 
     // Show choice: Camera or Gallery
     if (Platform.OS === 'web') {
-      pickImage('gallery');
+      pickImage('gallery', activePartnership);
       return;
     }
 
@@ -139,13 +151,13 @@ export default function MomentsScreen({ onNavigate }) {
       'Choose how to add your photo',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: '📷 Take Photo', onPress: () => pickImage('camera') },
-        { text: '🖼️ Choose from Gallery', onPress: () => pickImage('gallery') },
+        { text: '📷 Take Photo', onPress: () => pickImage('camera', activePartnership) },
+        { text: '🖼️ Choose from Gallery', onPress: () => pickImage('gallery', activePartnership) },
       ]
     );
   };
 
-  const pickImage = async (source) => {
+  const pickImage = async (source, activePartnership) => {
     let permissionResult;
     
     if (source === 'camera') {
@@ -178,7 +190,7 @@ export default function MomentsScreen({ onNavigate }) {
       try {
         const caption = await promptForCaption();
         const newMoment = await momentsService.uploadMoment(
-          partnership.id,
+          activePartnership.id,
           user.id, 
           result.assets[0].uri,
           caption
@@ -189,7 +201,7 @@ export default function MomentsScreen({ onNavigate }) {
 
           try {
             const myName = profile?.name || user?.user_metadata?.name || 'Your partner';
-            await notificationService.notifyPartnerNewMoment(partnership.partner.id, myName);
+            await notificationService.notifyPartnerNewMoment(activePartnership?.partner?.id, myName);
           } catch (notifError) {
             console.log('[MOMENTS] Notification send failed (non-blocking):', notifError?.message || notifError);
           }
@@ -237,6 +249,14 @@ export default function MomentsScreen({ onNavigate }) {
       destructive: true,
       onConfirm: async () => {
         try {
+          const activePartnership = await refreshPartnership();
+          if (!activePartnership?.id) {
+            showAlert(
+              'Partner Changed',
+              'Your previous connection is no longer active. Enter a partner code to reconnect.'
+            );
+            return;
+          }
           await momentsService.deleteMoment(moment.id, moment.image_url);
           setMoments(prev => prev.filter(m => m.id !== moment.id));
           setSelectedMoment(null);
@@ -252,6 +272,8 @@ export default function MomentsScreen({ onNavigate }) {
     <TouchableOpacity
       style={styles.momentItem}
       onPress={() => setSelectedMoment(item)}
+      onLongPress={() => handleDeleteMoment(item)}
+      delayLongPress={500}
     >
       <Image source={{ uri: item.image_url }} style={styles.momentImage} />
       {item.user_id === user?.id && (

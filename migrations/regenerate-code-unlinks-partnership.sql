@@ -7,6 +7,7 @@ DECLARE
   v_user_id UUID := auth.uid();
   v_partnership_id UUID;
   v_partner_id UUID;
+  v_disconnected_partner_ids UUID[];
   v_new_code TEXT;
   v_code_record RECORD;
   v_unlinked BOOLEAN := false;
@@ -28,21 +29,52 @@ BEGIN
   ORDER BY p.created_at DESC
   LIMIT 1;
 
-  IF v_partnership_id IS NOT NULL AND v_partner_id IS NOT NULL THEN
-    -- Serialize operations that affect this couple's active relationship.
-    PERFORM pg_advisory_xact_lock(hashtextextended(LEAST(v_user_id, v_partner_id)::text, 0));
-    PERFORM pg_advisory_xact_lock(hashtextextended(GREATEST(v_user_id, v_partner_id)::text, 0));
+  IF v_partnership_id IS NOT NULL THEN
+    -- Serialize partnership regeneration to avoid races.
+    LOCK TABLE public.partnerships IN SHARE ROW EXCLUSIVE MODE;
 
-    UPDATE public.partnerships
-    SET status = 'ended'
-    WHERE id = v_partnership_id
-      AND status = 'active';
+    SELECT ARRAY_AGG(DISTINCT ended.partner_id)
+    INTO v_disconnected_partner_ids
+    FROM (
+      UPDATE public.partnerships p
+      SET status = 'ended'
+      WHERE p.status = 'active'
+        AND (p.user1_id = v_user_id OR p.user2_id = v_user_id)
+      RETURNING CASE
+        WHEN p.user1_id = v_user_id THEN p.user2_id
+        ELSE p.user1_id
+      END AS partner_id
+    ) ended;
 
-    v_unlinked := FOUND;
+    v_unlinked := COALESCE(array_length(v_disconnected_partner_ids, 1), 0) > 0;
 
     UPDATE public.profiles
     SET partner_id = NULL
-    WHERE id IN (v_user_id, v_partner_id);
+    WHERE id = v_user_id
+      OR id = ANY(COALESCE(v_disconnected_partner_ids, ARRAY[]::UUID[]))
+      OR partner_id = v_user_id;
+
+    -- Revoke cross-shared premium access when this couple disconnects.
+    -- A real payer keeps their own premium (premium_granted_by is NULL),
+    -- while the recipient of shared premium loses access.
+    UPDATE public.profiles
+    SET
+      is_premium = FALSE,
+      premium_plan = NULL,
+      premium_since = NULL,
+      premium_expires = NULL,
+      iap_transaction_id = NULL,
+      iap_product_id = NULL,
+      premium_granted_by = NULL,
+      updated_at = NOW()
+    WHERE (
+      id = v_user_id
+      OR id = ANY(COALESCE(v_disconnected_partner_ids, ARRAY[]::UUID[]))
+    )
+      AND (
+        premium_granted_by = v_user_id
+        OR premium_granted_by = ANY(COALESCE(v_disconnected_partner_ids, ARRAY[]::UUID[]))
+      );
   END IF;
 
   DELETE FROM public.partner_codes

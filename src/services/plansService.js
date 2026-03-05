@@ -6,8 +6,77 @@ export const BUDGET_OPTIONS = ['Low', 'Medium', 'High'];
 export const VIBE_OPTIONS = ['Casual', 'Romantic', 'Adventurous', 'Relaxing'];
 
 export const plansService = {
+  async assertCurrentActivePartnership(partnershipId, userId, options = {}) {
+    const { enforceExpected = true } = options;
+    const activePartnershipId = await this.getCurrentActivePartnershipId(userId);
+
+    if (!activePartnershipId) {
+      const err = new Error('Your partner connection is no longer active. Please reconnect.');
+      err.code = 'PARTNERSHIP_DISCONNECTED';
+      throw err;
+    }
+
+    if (enforceExpected && partnershipId && activePartnershipId !== partnershipId) {
+      const err = new Error(
+        'Your partner connection changed. Return to pairing and connect again.'
+      );
+      err.code = 'PARTNERSHIP_DISCONNECTED';
+      throw err;
+    }
+
+    return activePartnershipId;
+  },
+
+  async getCurrentActivePartnershipId(userId) {
+    const { data, error } = await supabase
+      .from('partnerships')
+      .select('id')
+      .or(`user1_id.eq.${userId},user2_id.eq.${userId}`)
+      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (error) {
+      throw error;
+    }
+
+    const rows = Array.isArray(data) ? data : (data ? [data] : []);
+    return rows[0]?.id || null;
+  },
+
+  async assertPlanBelongsToActivePartnership(planId, userId) {
+    const { data: plan, error: planError } = await supabase
+      .from('plans')
+      .select('id, partnership_id')
+      .eq('id', planId)
+      .maybeSingle();
+
+    if (planError) {
+      throw new Error('Could not verify this plan right now.');
+    }
+
+    if (!plan?.id) {
+      throw new Error('Plan no longer exists.');
+    }
+
+    const activePartnershipId = await this.assertCurrentActivePartnership(
+      plan.partnership_id,
+      userId,
+      { enforceExpected: false }
+    );
+
+    if (plan.partnership_id !== activePartnershipId) {
+      const err = new Error(
+        'This plan belongs to a previous partner connection and can no longer be updated.'
+      );
+      err.code = 'OLD_PARTNERSHIP_PLAN';
+      throw err;
+    }
+  },
+
   async createPlan(partnershipId, userId, planData) {
     console.log('[PLANS SERVICE] createPlan called');
+    await this.assertCurrentActivePartnership(partnershipId, userId);
 
     const safeBudget = BUDGET_OPTIONS.includes(planData.budget)
       ? planData.budget
@@ -39,8 +108,11 @@ export const plansService = {
     return data;
   },
 
-  async getPlans(partnershipId) {
+  async getPlans(partnershipId, userId = null) {
     console.log('[PLANS SERVICE] getPlans called');
+    if (userId) {
+      await this.assertCurrentActivePartnership(partnershipId, userId);
+    }
 
     const { data, error } = await withServiceTimeout(
       supabase
@@ -62,6 +134,7 @@ export const plansService = {
 
   async confirmPlan(planId, userId) {
     console.log('[PLANS SERVICE] confirmPlan called:', planId);
+    await this.assertPlanBelongsToActivePartnership(planId, userId);
 
     const { data, error } = await supabase
       .from('plans')
@@ -85,6 +158,7 @@ export const plansService = {
 
   async rejectPlan(planId, userId) {
     console.log('[PLANS SERVICE] rejectPlan called:', planId);
+    await this.assertPlanBelongsToActivePartnership(planId, userId);
 
     const { data, error } = await supabase
       .from('plans')
@@ -105,8 +179,9 @@ export const plansService = {
     return data;
   },
 
-  async completePlan(planId) {
+  async completePlan(planId, userId) {
     console.log('[PLANS SERVICE] completePlan called:', planId);
+    await this.assertPlanBelongsToActivePartnership(planId, userId);
 
     const { data, error } = await supabase
       .from('plans')
@@ -127,8 +202,9 @@ export const plansService = {
     return data;
   },
 
-  async deletePlan(planId) {
+  async deletePlan(planId, userId) {
     console.log('[PLANS SERVICE] deletePlan called:', planId);
+    await this.assertPlanBelongsToActivePartnership(planId, userId);
 
     const { error } = await supabase
       .from('plans')

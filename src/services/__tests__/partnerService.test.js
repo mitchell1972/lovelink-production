@@ -128,6 +128,10 @@ describe('partnerService.generateCode', () => {
     jest.clearAllMocks();
   });
 
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   it('uses regenerate_partner_code RPC when available and returns its code payload', async () => {
     mockSupabase.rpc.mockResolvedValue({
       data: {
@@ -162,6 +166,8 @@ describe('partnerService.generateCode', () => {
       code: 'EFGH-5678',
       expires_at: '2099-01-01T00:00:00.000Z',
     };
+
+    jest.spyOn(partnerService, 'getPartnership').mockResolvedValue(null);
 
     const isDelete = jest.fn().mockResolvedValue({ error: null });
     const insertSingle = jest.fn().mockResolvedValue({ data: inserted, error: null });
@@ -199,7 +205,32 @@ describe('partnerService.generateCode', () => {
 
     expect(mockSupabase.rpc).toHaveBeenNthCalledWith(1, 'regenerate_partner_code');
     expect(mockSupabase.rpc).toHaveBeenNthCalledWith(2, 'generate_partner_code');
-    expect(result).toEqual(inserted);
+    expect(result).toEqual({
+      ...inserted,
+      unlinked: false,
+    });
+  });
+
+  it('blocks fallback regeneration when user is still linked', async () => {
+    jest.spyOn(partnerService, 'getPartnership').mockResolvedValue({
+      id: 'partnership-1',
+      user1_id: 'user-1',
+      user2_id: 'user-2',
+      status: 'active',
+      partner: { id: 'user-2', name: 'Partner' },
+    });
+
+    mockSupabase.rpc.mockResolvedValueOnce({
+      data: null,
+      error: { code: 'PGRST202', message: 'Function not found' },
+    });
+
+    await expect(partnerService.generateCode('user-1')).rejects.toThrow(
+      'For safety, this environment must install the unlink migration before generating a new code while linked.'
+    );
+
+    expect(mockSupabase.rpc).toHaveBeenCalledTimes(1);
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('regenerate_partner_code');
   });
 });
 

@@ -219,7 +219,7 @@ export const getTrialAccessStatus = async (userId) => {
       hasAccess: isInTrial,
       isPremium: false,
       isInTrial,
-      daysRemaining: isInTrial ? Math.ceil(msRemaining / ONE_DAY_MS) : 0,
+      daysRemaining: isInTrial ? Math.max(1, Math.floor(msRemaining / ONE_DAY_MS)) : 0,
       trialEndsAt: trialEndsAt.toISOString(),
       reason: isInTrial ? 'trial' : 'expired',
     };

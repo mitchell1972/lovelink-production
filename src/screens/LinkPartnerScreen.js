@@ -88,13 +88,13 @@ export const LinkPartnerScreen = () => {
   };
 
   const formatCodeInput = (val) => {
-    // Remove any non-alphanumeric except hyphen
-    let cleaned = val.toUpperCase().replace(/[^A-Z0-9-]/g, '');
+    // Strip everything except alphanumeric
+    let digits = val.toUpperCase().replace(/[^A-Z0-9]/g, '');
     // Auto-add hyphen after 4 characters
-    if (cleaned.length === 5 && !cleaned.includes('-')) {
-      cleaned = cleaned.slice(0, 4) + '-' + cleaned.slice(4);
+    if (digits.length > 4) {
+      digits = digits.slice(0, 4) + '-' + digits.slice(4, 8);
     }
-    setPartnerCode(cleaned);
+    setPartnerCode(digits);
   };
 
   return (

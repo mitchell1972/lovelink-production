@@ -2,14 +2,15 @@ import { supabase } from '../config/supabase';
 import { withServiceTimeout } from './serviceTimeout';
 
 export const pulseService = {
-  async sendPulse(partnershipId, senderId) {
-    console.log('[PULSE SERVICE] sendPulse called:', { partnershipId, senderId });
+  async sendPulse(partnershipId, senderId, pattern = 'heartbeat') {
+    console.log('[PULSE SERVICE] sendPulse called:', { partnershipId, senderId, pattern });
 
     const { data, error } = await supabase
       .from('pulses')
       .insert({
         partnership_id: partnershipId,
         sender_id: senderId,
+        pattern,
       })
       .select()
       .single();

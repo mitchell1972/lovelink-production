@@ -44,7 +44,7 @@ export const sessionService = {
 
   getTodaySessionType() {
     const today = new Date();
-    const dateString = `${today.getFullYear()}-${today.getMonth()}-${today.getDate()}`;
+    const dateString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
     let hash = 0;
     for (let i = 0; i < dateString.length; i++) {
       hash = ((hash << 5) - hash) + dateString.charCodeAt(i);
@@ -171,7 +171,7 @@ export const sessionService = {
   },
 
   async getPartnerSessionByDate(partnershipId, partnerId, sessionType, dateString) {
-    return this.getUserSessionByDate(partnershipId, partnerId, dateString, sessionType);
+    return this.getUserSessionByDate(partnershipId, partnerId, sessionType, dateString);
   },
 
   subscribeToSessions(partnershipId, callback) {
@@ -195,7 +195,7 @@ export const sessionService = {
   subscribeToUserSessions(userId, callback) {
     console.log('[SESSION] Subscribing to sessions for user:', userId);
     return supabase
-      .channel(`sessions:user:${userId}:${Date.now()}`)
+      .channel(`sessions:user:${userId}`)
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',

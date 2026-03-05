@@ -21,7 +21,7 @@ const getLast30Days = () => {
 };
 
 const getSessionTypeForDate = (dateObj) => {
-  const dateString = `${dateObj.date.getFullYear()}-${dateObj.date.getMonth()}-${dateObj.date.getDate()}`;
+  const dateString = `${dateObj.date.getFullYear()}-${String(dateObj.date.getMonth() + 1).padStart(2, '0')}-${String(dateObj.date.getDate()).padStart(2, '0')}`;
   let hash = 0;
   for (let i = 0; i < dateString.length; i++) {
     hash = ((hash << 5) - hash) + dateString.charCodeAt(i);
@@ -33,7 +33,7 @@ const getSessionTypeForDate = (dateObj) => {
 };
 
 export const SessionScreen = ({ onNavigate }) => {
-  const { user, partnership } = useAuth();
+  const { user, partnership, refreshPartnership } = useAuth();
   const [session, setSession] = useState(null);
   const [answer, setAnswer] = useState('');
   const [partnerAnswer, setPartnerAnswer] = useState(null);
@@ -83,13 +83,18 @@ export const SessionScreen = ({ onNavigate }) => {
     loadSessionForDate(dateObj);
   };
 
-  const tryDifferentSession = () => {
-    console.log('[SCREEN] tryDifferentSession called');
-    if (submitted || isViewingHistory) {
-      return;
-    }
-    const randomSession = sessionService.getRandomSessionType();
-    setSession(randomSession);
+  const SESSION_TYPE_CHIPS = [
+    { key: 'mood', label: '😊 Mood', icon: '😊' },
+    { key: 'appreciation', label: '💕 Appreciate', icon: '💕' },
+    { key: 'microPlan', label: '📋 Micro Plan', icon: '📋' },
+    { key: 'wins', label: '🏆 Wins', icon: '🏆' },
+  ];
+
+  const switchSessionType = (typeKey) => {
+    if (submitted || isViewingHistory) return;
+    const nextSession = sessionService.SESSION_TYPES[typeKey];
+    if (!nextSession) return;
+    setSession(nextSession);
     setAnswer('');
     setSubmitted(false);
     setPartnerAnswer(null);
@@ -233,11 +238,20 @@ export const SessionScreen = ({ onNavigate }) => {
       return;
     }
 
+    const activePartnership = await refreshPartnership();
+    if (!activePartnership?.id) {
+      Alert.alert(
+        'Partner Changed',
+        'Your previous connection is no longer active. Enter a partner code to reconnect.'
+      );
+      return;
+    }
+
     setLoading(true);
     try {
       console.log('[SCREEN] Submitting session...');
       await sessionService.submitSession(
-        partnership.id,
+        activePartnership.id,
         user.id,
         session.type,
         answer.trim()
@@ -247,7 +261,7 @@ export const SessionScreen = ({ onNavigate }) => {
 
       try {
         const myName = user?.user_metadata?.name || 'Your partner';
-        await notificationService.notifyPartnerSessionComplete(partnership.partner.id, myName);
+        await notificationService.notifyPartnerSessionComplete(activePartnership?.partner?.id, myName);
       } catch (notifError) {
         console.log('[SCREEN] Notification send failed (non-blocking):', notifError?.message || notifError);
       }
@@ -391,21 +405,37 @@ export const SessionScreen = ({ onNavigate }) => {
           </View>
         )}
 
-        <View style={styles.buttonRow}>
-          <Button 
-            title="📅 History" 
-            variant="outline" 
-            onPress={() => setShowDatePicker(true)} 
-            style={styles.halfButton} 
-          />
-          <Button 
-            title="🔄 Random" 
-            variant="outline" 
-            onPress={tryDifferentSession} 
-            style={styles.halfButton}
-            disabled={isViewingHistory || submitted}
-          />
-        </View>
+        {!isViewingHistory && !submitted && (
+          <View style={styles.typePickerSection}>
+            <Text style={styles.typePickerLabel}>Try a different prompt:</Text>
+            <View style={styles.typePickerRow}>
+              {SESSION_TYPE_CHIPS.map((chip) => (
+                <TouchableOpacity
+                  key={chip.key}
+                  style={[
+                    styles.typeChip,
+                    session?.type === chip.key && styles.typeChipActive,
+                  ]}
+                  onPress={() => switchSessionType(chip.key)}
+                >
+                  <Text style={[
+                    styles.typeChipText,
+                    session?.type === chip.key && styles.typeChipTextActive,
+                  ]}>
+                    {chip.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        )}
+
+        <Button
+          title="📅 History"
+          variant="outline"
+          onPress={() => setShowDatePicker(true)}
+          style={styles.historyBtn}
+        />
 
         {isViewingHistory && (
           <Button 
@@ -512,8 +542,24 @@ const styles = StyleSheet.create({
   waitingText: { fontSize: 14, color: '#999', fontStyle: 'italic', textAlign: 'center' },
   waitingHint: { fontSize: 12, color: '#888', marginTop: 8 },
   refreshBtn: { marginTop: 10 },
-  buttonRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 15 },
-  halfButton: { width: '48%' },
+  typePickerSection: { marginTop: 18, marginBottom: 4 },
+  typePickerLabel: { fontSize: 13, color: '#888', marginBottom: 8, textAlign: 'center' },
+  typePickerRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8 },
+  typeChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: '#D7DBFF',
+    backgroundColor: '#F5F6FF',
+  },
+  typeChipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  typeChipText: { fontSize: 13, fontWeight: '600', color: '#6C63FF' },
+  typeChipTextActive: { color: '#fff' },
+  historyBtn: { marginTop: 12 },
   todayBtn: { marginTop: 10 },
   backBtn: { marginTop: 10 },
   inputAccessory: {

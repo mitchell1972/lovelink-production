@@ -57,7 +57,7 @@ const ALL_PULSE_PATTERNS = {
 };
 
 export default function PulseScreen({ onNavigate }) {
-  const { user, profile, partnership } = useAuth();
+  const { user, profile, partnership, refreshPartnership } = useAuth();
   const [sending, setSending] = useState(false);
   const [myPulses, setMyPulses] = useState([]);
   const [receivedPulses, setReceivedPulses] = useState([]);
@@ -135,7 +135,8 @@ export default function PulseScreen({ onNavigate }) {
   };
 
   const handleSendPulse = async () => {
-    if (!partnership?.id) {
+    const activePartnership = await refreshPartnership();
+    if (!activePartnership?.id) {
       showAlert('No Partner', 'Connect with your partner first!');
       return;
     }
@@ -147,12 +148,12 @@ export default function PulseScreen({ onNavigate }) {
     Vibration.vibrate(pattern.vibration);
 
     try {
-      await pulseService.sendPulse(partnership.id, user.id);
+      await pulseService.sendPulse(activePartnership.id, user.id, selectedPattern);
       await loadPulses();
 
       try {
         const myName = profile?.name || user?.user_metadata?.name || 'Your partner';
-        await notificationService.notifyPartnerPulse(partnership.partner.id, myName);
+        await notificationService.notifyPartnerPulse(activePartnership?.partner?.id, myName);
       } catch (notifError) {
         console.log('[PULSE] Notification send failed (non-blocking):', notifError?.message || notifError);
       }
@@ -182,6 +183,14 @@ export default function PulseScreen({ onNavigate }) {
       destructive: true,
       onConfirm: async () => {
         try {
+          const activePartnership = await refreshPartnership();
+          if (!activePartnership?.id) {
+            showAlert(
+              'Partner Changed',
+              'Your previous connection is no longer active. Enter a partner code to reconnect.'
+            );
+            return;
+          }
           await pulseService.deletePulse(pulse.id, user.id);
           await loadPulses();
           showAlert('Deleted', 'Pulse removed from history');
@@ -324,7 +333,7 @@ export default function PulseScreen({ onNavigate }) {
           <Text style={styles.recentTitle}>Recent Pulses</Text>
           {allPulses.map((pulse) => (
             <TouchableOpacity
-              key={pulse.id}
+              key={`${pulse.id}-${pulse.isFromMe ? 'sent' : 'recv'}`}
               style={styles.pulseItem}
               onLongPress={() => handleDeletePulse(pulse)}
             >

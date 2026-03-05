@@ -35,13 +35,24 @@ const EMPTY_UNREAD = {
 
 // Main app content with navigation
 const AppContent = () => {
-  const { user, partnership, loading, isAuthenticated, isPaired } = useAuth();
+  const { user, partnership, loading, isAuthenticated, isPaired, refreshPartnership } = useAuth();
   const [authScreen, setAuthScreen] = useState('signup');
   const [currentScreen, setCurrentScreen] = useState('home');
   const [unreadIndicators, setUnreadIndicators] = useState(EMPTY_UNREAD);
 
   const handleNavigate = useCallback(
-    (screen) => {
+    async (screen) => {
+      if (FEATURE_SCREEN_IDS.includes(screen) && user?.id) {
+        const latestPartnership = await refreshPartnership();
+        if (!latestPartnership?.id) {
+          Alert.alert(
+            'Partner Changed',
+            'Your previous connection is no longer active. Enter a partner code to reconnect.'
+          );
+          return;
+        }
+      }
+
       setCurrentScreen(screen);
 
       if (FEATURE_SCREEN_IDS.includes(screen) && user?.id) {
@@ -51,14 +62,16 @@ const AppContent = () => {
         });
       }
     },
-    [user?.id]
+    [refreshPartnership, user?.id]
   );
 
-  // Expose navigation for automated testing
+  // Expose navigation for automated testing (dev only)
   useEffect(() => {
-    global.__testNavigate = (screen) => handleNavigate(screen);
-    global.__testGetScreen = () => currentScreen;
-    return () => { delete global.__testNavigate; delete global.__testGetScreen; };
+    if (__DEV__) {
+      global.__testNavigate = (screen) => handleNavigate(screen);
+      global.__testGetScreen = () => currentScreen;
+      return () => { delete global.__testNavigate; delete global.__testGetScreen; };
+    }
   }, [currentScreen, handleNavigate]);
 
   useEffect(() => {

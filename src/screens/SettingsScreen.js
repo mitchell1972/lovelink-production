@@ -68,17 +68,28 @@ export const SettingsScreen = ({ onNavigate }) => {
           onPress: async () => {
             setLoadingCode(true);
             try {
+              const wasPaired = !!partnership;
               const newCode = await partnerService.generateCode(user.id);
               setLinkCode(newCode);
-              if (newCode?.unlinked) {
-                await refreshPartnership();
+              const updatedPartnership = await refreshPartnership();
+
+              if (wasPaired && !updatedPartnership) {
                 Alert.alert('Success ✅', 'New code generated and previous partnership disconnected.');
-              } else {
-                Alert.alert('Success ✅', 'New code generated! Share it with your partner.');
+                return;
               }
+
+              if (wasPaired && updatedPartnership) {
+                Alert.alert(
+                  'Action Required',
+                  'Your partnership is still active. Please run migrations/regenerate-code-unlinks-partnership.sql in Supabase, then try Generate New Code again.'
+                );
+                return;
+              }
+
+              Alert.alert('Success ✅', 'New code generated! Share it with your partner.');
             } catch (err) {
               console.error('Error generating code:', err);
-              Alert.alert('Error', 'Failed to generate new code');
+              Alert.alert('Error', err?.message || 'Failed to generate new code');
             } finally {
               setLoadingCode(false);
             }
@@ -264,7 +275,7 @@ export const SettingsScreen = ({ onNavigate }) => {
             style={styles.regenerateBtn}
           />
           <Text style={styles.noteText}>
-            ⚠️ Generating a new code will invalidate your current code.
+            ⚠️ Generating a new code will invalidate your current code and disconnect your current partner.
           </Text>
         </View>
 
@@ -335,7 +346,7 @@ export const SettingsScreen = ({ onNavigate }) => {
         </View>
 
         <View style={styles.version}>
-          <Text style={styles.versionText}>LoveLink v1.0.2</Text>
+          <Text style={styles.versionText}>LoveLink v1.0.4</Text>
         </View>
 
         <Button 

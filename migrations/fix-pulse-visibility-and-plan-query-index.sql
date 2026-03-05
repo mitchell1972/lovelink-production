@@ -13,6 +13,7 @@ CREATE POLICY "Users can view partnership pulses" ON public.pulses
       SELECT 1
       FROM public.partnerships p
       WHERE p.id = pulses.partnership_id
+        AND p.status = 'active'
         AND auth.uid() IN (p.user1_id, p.user2_id)
     )
   );

@@ -18,7 +18,7 @@ import { showAlert, showConfirm } from '../services/webAlert';
 import { Card, Heading, Subheading, Input, Button } from '../components/ui';
 
 export const PlanScreen = ({ onNavigate }) => {
-  const { user, partnership } = useAuth();
+  const { user, partnership, refreshPartnership } = useAuth();
   const [plans, setPlans] = useState([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
@@ -31,6 +31,13 @@ export const PlanScreen = ({ onNavigate }) => {
   const [budget, setBudget] = useState('Medium');
   const [vibe, setVibe] = useState('Casual');
   const titleInputAccessoryViewId = 'plan-title-input-accessory';
+  const handleDisconnectedPartnership = async (message = null) => {
+    await refreshPartnership();
+    showAlert(
+      'Partner Changed',
+      message || 'Your partner connection is no longer active. Please reconnect.'
+    );
+  };
 
   const handleTitleChange = (nextTitle) => {
     setTitle(nextTitle);
@@ -66,9 +73,13 @@ export const PlanScreen = ({ onNavigate }) => {
     setLoading(true);
     setLoadError('');
     try {
-      const data = await plansService.getPlans(partnership.id);
+      const data = await plansService.getPlans(partnership.id, user?.id);
       setPlans(data || []);
     } catch (err) {
+      if (err?.code === 'PARTNERSHIP_DISCONNECTED') {
+        await handleDisconnectedPartnership(err.message);
+        return;
+      }
       console.log('[PLAN SCREEN] ERROR loading plans:', err);
       const message = isServiceTimeoutError(err)
         ? 'Loading plans is taking too long. Please try again.'
@@ -155,14 +166,18 @@ export const PlanScreen = ({ onNavigate }) => {
 
       try {
         const myName = user?.user_metadata?.name || 'Your partner';
-        await notificationService.notifyPartnerNewPlan(partnership.partner.id, myName, title.trim());
+        await notificationService.notifyPartnerNewPlan(partnership?.partner?.id, myName, title.trim());
       } catch (notifError) {
         console.log('[PLAN SCREEN] Notification send failed (non-blocking):', notifError?.message || notifError);
       }
       
-      showAlert('Plan Created! 📅', `Waiting for ${partnership.partner.name} to confirm.`);
+      showAlert('Plan Created! 📅', `Waiting for ${partnership?.partner?.name || 'your partner'} to confirm.`);
     } catch (err) {
       console.log('[PLAN SCREEN] ERROR creating plan:', err);
+      if (err?.code === 'PARTNERSHIP_DISCONNECTED') {
+        await handleDisconnectedPartnership(err.message);
+        return;
+      }
       showAlert('Error', err.message || 'Failed to create plan');
     } finally {
       setLoading(false);
@@ -176,7 +191,7 @@ export const PlanScreen = ({ onNavigate }) => {
 
       try {
         const myName = user?.user_metadata?.name || 'Your partner';
-        await notificationService.notifyPartnerPlanConfirmed(partnership.partner.id, myName, plan.title);
+        await notificationService.notifyPartnerPlanConfirmed(partnership?.partner?.id, myName, plan.title);
       } catch (notifError) {
         console.log('[PLAN SCREEN] Notification send failed (non-blocking):', notifError?.message || notifError);
       }
@@ -184,7 +199,11 @@ export const PlanScreen = ({ onNavigate }) => {
       showAlert('Plan Confirmed! 🎉', 'You both agreed to this plan!');
       loadPlans();
     } catch (err) {
-      showAlert('Error', 'Failed to confirm plan');
+      if (err?.code === 'OLD_PARTNERSHIP_PLAN' || err?.code === 'PARTNERSHIP_DISCONNECTED') {
+        await handleDisconnectedPartnership(err.message);
+        return;
+      }
+      showAlert('Error', err?.message || 'Failed to confirm plan');
     }
   };
 
@@ -195,18 +214,26 @@ export const PlanScreen = ({ onNavigate }) => {
       showAlert('Plan Rejected', 'Maybe suggest a different idea?');
       loadPlans();
     } catch (err) {
-      showAlert('Error', 'Failed to reject plan');
+      if (err?.code === 'OLD_PARTNERSHIP_PLAN' || err?.code === 'PARTNERSHIP_DISCONNECTED') {
+        await handleDisconnectedPartnership(err.message);
+        return;
+      }
+      showAlert('Error', err?.message || 'Failed to reject plan');
     }
   };
 
   const handleComplete = async (plan) => {
     console.log('[PLAN SCREEN] handleComplete called');
     try {
-      await plansService.completePlan(plan.id);
+      await plansService.completePlan(plan.id, user.id);
       showAlert('Done! ✨', 'Hope you had a great time!');
       loadPlans();
     } catch (err) {
-      showAlert('Error', 'Failed to complete plan');
+      if (err?.code === 'OLD_PARTNERSHIP_PLAN' || err?.code === 'PARTNERSHIP_DISCONNECTED') {
+        await handleDisconnectedPartnership(err.message);
+        return;
+      }
+      showAlert('Error', err?.message || 'Failed to complete plan');
     }
   };
 
@@ -219,11 +246,15 @@ export const PlanScreen = ({ onNavigate }) => {
       destructive: true,
       onConfirm: async () => {
         try {
-          await plansService.deletePlan(plan.id);
+          await plansService.deletePlan(plan.id, user.id);
           showAlert('Deleted', 'Plan has been removed.');
           loadPlans();
         } catch (err) {
-          showAlert('Error', 'Failed to delete plan');
+          if (err?.code === 'OLD_PARTNERSHIP_PLAN' || err?.code === 'PARTNERSHIP_DISCONNECTED') {
+            await handleDisconnectedPartnership(err.message);
+            return;
+          }
+          showAlert('Error', err?.message || 'Failed to delete plan');
         }
       },
     });
@@ -263,7 +294,7 @@ export const PlanScreen = ({ onNavigate }) => {
     >
       <Card>
         <Heading>Plans</Heading>
-        <Subheading>Plan dates together with {partnership.partner.name}</Subheading>
+        <Subheading>Plan dates together with {partnership?.partner?.name || 'your partner'}</Subheading>
 
         {loadError ? (
           <View style={styles.errorBanner}>
@@ -416,7 +447,7 @@ export const PlanScreen = ({ onNavigate }) => {
                 )}
                 <Text style={styles.planMeta}>💰 {plan.budget} • ✨ {plan.vibe}</Text>
                 <Text style={styles.planCreator}>
-                  Created by {plan.created_by === user.id ? 'you' : partnership.partner.name}
+                  Created by {plan.created_by === user.id ? 'you' : (partnership?.partner?.name || 'your partner')}
                 </Text>
 
                 {plan.status === 'draft' && plan.created_by !== user.id && (
@@ -427,7 +458,7 @@ export const PlanScreen = ({ onNavigate }) => {
                 )}
 
                 {plan.status === 'draft' && plan.created_by === user.id && (
-                  <Text style={styles.waitingText}>Waiting for {partnership.partner.name}...</Text>
+                  <Text style={styles.waitingText}>Waiting for {partnership?.partner?.name || 'your partner'}...</Text>
                 )}
 
                 {plan.status === 'confirmed' && (
