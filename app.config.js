@@ -15,7 +15,7 @@ export default {
     ios: {
       supportsTablet: true,
       bundleIdentifier: "com.mitchellagoma.lovelink",
-      buildNumber: "21",
+      buildNumber: "22",
       infoPlist: {
         NSCameraUsageDescription:
           "LoveLink needs camera access to capture moments with your partner",
