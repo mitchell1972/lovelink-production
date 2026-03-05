@@ -186,6 +186,20 @@ test.describe.serial('LoveLink Cross-User E2E Tests', () => {
   // ── 3. Daily Session ─────────────────────────────────────────────────
 
   test('3. Daily Session – cross-user communication', async () => {
+    // ── Ensure Bob is on the home dashboard ──
+    let bobText = await getPageText(bob);
+    if (bobText.includes('Link With Your Partner')) {
+      // Bob's page reverted to link screen — sign back in
+      await signIn(bob, BOB);
+      await bob.waitForTimeout(3000);
+      bobText = await getPageText(bob);
+      if (bobText.includes('Link With Your Partner')) {
+        // Partnership not detected — wait longer and retry once
+        await bob.waitForTimeout(5000);
+        bobText = await getPageText(bob);
+      }
+      console.log(`   Bob state after signIn: ${bobText.substring(0, 120)}`);
+    }
     // ── Bob submits ──
     await navigateTo(bob, 'session');
     await bob.waitForTimeout(2000);

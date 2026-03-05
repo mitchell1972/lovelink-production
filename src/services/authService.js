@@ -1,8 +1,9 @@
 import { supabase } from '../config/supabase';
+import { log } from '../utils/logger';
 
 export const authService = {
   async signUp(email, password, name) {
-    console.log('[AUTH] signUp called:', email);
+    log('[AUTH] signUp called:', email);
     
     const { data, error } = await supabase.auth.signUp({
       email,
@@ -13,16 +14,16 @@ export const authService = {
     });
 
     if (error) {
-      console.log('[AUTH] signUp error:', error);
+      log('[AUTH] signUp error:', error);
       throw error;
     }
 
-    console.log('[AUTH] signUp success');
+    log('[AUTH] signUp success');
     return data;
   },
 
   async signIn(email, password) {
-    console.log('[AUTH] signIn called:', email);
+    log('[AUTH] signIn called:', email);
     
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
@@ -30,16 +31,16 @@ export const authService = {
     });
 
     if (error) {
-      console.log('[AUTH] signIn error:', error);
+      log('[AUTH] signIn error:', error);
       throw error;
     }
 
-    console.log('[AUTH] signIn success');
+    log('[AUTH] signIn success');
     return data;
   },
 
   async signOut() {
-    console.log('[AUTH] signOut called');
+    log('[AUTH] signOut called');
     // Use local scope so logout works even when network is flaky.
     const { error } = await supabase.auth.signOut({ scope: 'local' });
     if (error && !/auth session missing/i.test(error.message || '')) {
@@ -48,17 +49,17 @@ export const authService = {
   },
 
   async resetPassword(email) {
-    console.log('[AUTH] resetPassword called:', email);
+    log('[AUTH] resetPassword called:', email);
     
     // Don't specify redirectTo - Supabase will use its default password reset page
     const { data, error } = await supabase.auth.resetPasswordForEmail(email);
 
     if (error) {
-      console.log('[AUTH] resetPassword error:', error);
+      log('[AUTH] resetPassword error:', error);
       throw error;
     }
 
-    console.log('[AUTH] resetPassword email sent');
+    log('[AUTH] resetPassword email sent');
     return data;
   },
 

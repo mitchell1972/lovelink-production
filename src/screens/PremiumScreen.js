@@ -2,6 +2,7 @@
 // Premium subscription screen with REAL Apple In-App Purchases
 
 import React, { useState, useEffect } from 'react';
+import { log, error as logError } from '../utils/logger';
 import {
   View,
   Text,
@@ -99,9 +100,9 @@ export default function PremiumScreen({ onNavigate }) {
         if (selectedPlan === 'yearly' && !hasYearly && hasMonthly) setSelectedPlan('monthly');
       }
       
-      console.log('Products loaded:', availableProducts);
-    } catch (error) {
-      console.error('Error initializing premium screen:', error);
+      log('Products loaded:', availableProducts);
+    } catch (err) {
+      logError('Error initializing premium screen:', err);
       setPremiumStatus({ isPremium: false, plan: null, since: null, expires: null });
 
       const msg = Platform.OS === 'ios'
@@ -143,12 +144,12 @@ export default function PremiumScreen({ onNavigate }) {
         );
       } else if (result.cancelled) {
         // User cancelled - do nothing
-        console.log('Purchase cancelled by user');
+        log('Purchase cancelled by user');
       } else {
         Alert.alert('Purchase Failed', result.error || 'Unable to complete purchase. Please try again.');
       }
-    } catch (error) {
-      console.error('Purchase error:', error);
+    } catch (err) {
+      logError('Purchase error:', err);
       Alert.alert('Error', 'An error occurred during purchase. Please try again.');
     }
 
@@ -185,8 +186,8 @@ export default function PremiumScreen({ onNavigate }) {
       } else {
         Alert.alert('No Purchases Found', 'No previous purchases found to restore.');
       }
-    } catch (error) {
-      console.error('Restore error:', error);
+    } catch (err) {
+      logError('Restore error:', err);
       Alert.alert('Error', 'Unable to restore purchases. Please try again.');
     }
 

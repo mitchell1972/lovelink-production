@@ -1,11 +1,10 @@
 import 'react-native-url-polyfill/auto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
+import Constants from 'expo-constants';
 
-// Replace these with your Supabase project credentials
-// Get these from: https://supabase.com/dashboard/project/YOUR_PROJECT/settings/api
-const SUPABASE_URL = 'https://tfrhdxatjsyobmyffuzg.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_GxepMKxepwVIz7JhqLhpBw_BYezF3AM';
+const SUPABASE_URL = Constants.expoConfig?.extra?.supabaseUrl || process.env.EXPO_PUBLIC_SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = Constants.expoConfig?.extra?.supabaseAnonKey || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {

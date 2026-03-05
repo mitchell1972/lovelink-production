@@ -1,4 +1,5 @@
 import { supabase } from '../config/supabase';
+import { log } from '../utils/logger';
 
 const missingRpcFunctionCodes = new Set(['PGRST202', '42883']);
 
@@ -328,7 +329,7 @@ export const partnerService = {
     } catch (embeddedError) {
       // Some PostgREST deployments can fail embedding when FK relationships are ambiguous.
       // Fall back to a plain partnerships query and fetch partner profile separately.
-      console.log('[PARTNER] Embedded partnership query failed, using fallback:', embeddedError?.message || embeddedError);
+      log('[PARTNER] Embedded partnership query failed, using fallback:', embeddedError?.message || embeddedError);
       rows = await getBaseRows();
       usedFallback = true;
     }

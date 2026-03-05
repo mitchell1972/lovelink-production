@@ -1,9 +1,10 @@
 import { supabase } from '../config/supabase';
+import { log } from '../utils/logger';
 import { withServiceTimeout } from './serviceTimeout';
 
 export const pulseService = {
   async sendPulse(partnershipId, senderId, pattern = 'heartbeat') {
-    console.log('[PULSE SERVICE] sendPulse called:', { partnershipId, senderId, pattern });
+    log('[PULSE SERVICE] sendPulse called:', { partnershipId, senderId, pattern });
 
     const { data, error } = await supabase
       .from('pulses')
@@ -16,16 +17,16 @@ export const pulseService = {
       .single();
 
     if (error) {
-      console.log('[PULSE SERVICE] ERROR sending:', error);
+      log('[PULSE SERVICE] ERROR sending:', error);
       throw error;
     }
 
-    console.log('[PULSE SERVICE] Pulse sent:', data);
+    log('[PULSE SERVICE] Pulse sent:', data);
     return data;
   },
 
   async getMyPulses(partnershipId, userId) {
-    console.log('[PULSE SERVICE] getMyPulses called');
+    log('[PULSE SERVICE] getMyPulses called');
 
     const { data, error } = await withServiceTimeout(
       supabase
@@ -39,7 +40,7 @@ export const pulseService = {
     );
 
     if (error) {
-      console.log('[PULSE SERVICE] ERROR fetching my pulses:', error);
+      log('[PULSE SERVICE] ERROR fetching my pulses:', error);
       throw error;
     }
 
@@ -47,7 +48,7 @@ export const pulseService = {
   },
 
   async getReceivedPulses(partnershipId, userId) {
-    console.log('[PULSE SERVICE] getReceivedPulses called');
+    log('[PULSE SERVICE] getReceivedPulses called');
 
     const { data, error } = await withServiceTimeout(
       supabase
@@ -61,7 +62,7 @@ export const pulseService = {
     );
 
     if (error) {
-      console.log('[PULSE SERVICE] ERROR fetching received pulses:', error);
+      log('[PULSE SERVICE] ERROR fetching received pulses:', error);
       throw error;
     }
 
@@ -69,7 +70,7 @@ export const pulseService = {
   },
 
   async deletePulse(pulseId, userId) {
-    console.log('[PULSE SERVICE] deletePulse called:', pulseId);
+    log('[PULSE SERVICE] deletePulse called:', pulseId);
 
     if (!userId) {
       throw new Error('Missing user id');
@@ -82,15 +83,15 @@ export const pulseService = {
       .eq('sender_id', userId);
 
     if (error) {
-      console.log('[PULSE SERVICE] ERROR deleting:', error);
+      log('[PULSE SERVICE] ERROR deleting:', error);
       throw error;
     }
 
-    console.log('[PULSE SERVICE] Pulse deleted');
+    log('[PULSE SERVICE] Pulse deleted');
   },
 
   async markPulseReceived(pulseId) {
-    console.log('[PULSE SERVICE] markPulseReceived called:', pulseId);
+    log('[PULSE SERVICE] markPulseReceived called:', pulseId);
 
     const { data, error } = await supabase
       .from('pulses')
@@ -100,7 +101,7 @@ export const pulseService = {
       .single();
 
     if (error) {
-      console.log('[PULSE SERVICE] ERROR marking received:', error);
+      log('[PULSE SERVICE] ERROR marking received:', error);
       throw error;
     }
 
@@ -108,7 +109,7 @@ export const pulseService = {
   },
 
   subscribeToPulses(partnershipId, callback) {
-    console.log('[PULSE SERVICE] Subscribing to pulses');
+    log('[PULSE SERVICE] Subscribing to pulses');
 
     return supabase
       .channel(`pulses:${partnershipId}`)
@@ -121,12 +122,12 @@ export const pulseService = {
           filter: `partnership_id=eq.${partnershipId}`,
         },
         (payload) => {
-          console.log('[PULSE SERVICE] Real-time update:', payload.eventType);
+          log('[PULSE SERVICE] Real-time update:', payload.eventType);
           callback(payload);
         }
       )
       .subscribe((status) => {
-        console.log('[PULSE SERVICE] Subscription status:', status);
+        log('[PULSE SERVICE] Subscription status:', status);
       });
   },
 };

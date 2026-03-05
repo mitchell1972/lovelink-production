@@ -1,4 +1,5 @@
 import { supabase } from '../config/supabase';
+import { log } from '../utils/logger';
 import { withServiceTimeout } from './serviceTimeout';
 
 // Keep in sync with DB check constraints in supabase-schema.sql
@@ -75,7 +76,7 @@ export const plansService = {
   },
 
   async createPlan(partnershipId, userId, planData) {
-    console.log('[PLANS SERVICE] createPlan called');
+    log('[PLANS SERVICE] createPlan called');
     await this.assertCurrentActivePartnership(partnershipId, userId);
 
     const safeBudget = BUDGET_OPTIONS.includes(planData.budget)
@@ -100,16 +101,16 @@ export const plansService = {
       .single();
 
     if (error) {
-      console.log('[PLANS SERVICE] CREATE ERROR:', error);
+      log('[PLANS SERVICE] CREATE ERROR:', error);
       throw new Error('Create failed: ' + error.message);
     }
 
-    console.log('[PLANS SERVICE] Plan created:', data.id);
+    log('[PLANS SERVICE] Plan created:', data.id);
     return data;
   },
 
   async getPlans(partnershipId, userId = null) {
-    console.log('[PLANS SERVICE] getPlans called');
+    log('[PLANS SERVICE] getPlans called');
     if (userId) {
       await this.assertCurrentActivePartnership(partnershipId, userId);
     }
@@ -124,16 +125,16 @@ export const plansService = {
     );
 
     if (error) {
-      console.log('[PLANS SERVICE] FETCH ERROR:', error);
+      log('[PLANS SERVICE] FETCH ERROR:', error);
       throw error;
     }
 
-    console.log('[PLANS SERVICE] Fetched:', data?.length, 'plans');
+    log('[PLANS SERVICE] Fetched:', data?.length, 'plans');
     return data;
   },
 
   async confirmPlan(planId, userId) {
-    console.log('[PLANS SERVICE] confirmPlan called:', planId);
+    log('[PLANS SERVICE] confirmPlan called:', planId);
     await this.assertPlanBelongsToActivePartnership(planId, userId);
 
     const { data, error } = await supabase
@@ -148,16 +149,16 @@ export const plansService = {
       .single();
 
     if (error) {
-      console.log('[PLANS SERVICE] CONFIRM ERROR:', error);
+      log('[PLANS SERVICE] CONFIRM ERROR:', error);
       throw new Error('Confirm failed: ' + error.message);
     }
 
-    console.log('[PLANS SERVICE] Plan confirmed');
+    log('[PLANS SERVICE] Plan confirmed');
     return data;
   },
 
   async rejectPlan(planId, userId) {
-    console.log('[PLANS SERVICE] rejectPlan called:', planId);
+    log('[PLANS SERVICE] rejectPlan called:', planId);
     await this.assertPlanBelongsToActivePartnership(planId, userId);
 
     const { data, error } = await supabase
@@ -171,16 +172,16 @@ export const plansService = {
       .single();
 
     if (error) {
-      console.log('[PLANS SERVICE] REJECT ERROR:', error);
+      log('[PLANS SERVICE] REJECT ERROR:', error);
       throw new Error('Reject failed: ' + error.message);
     }
 
-    console.log('[PLANS SERVICE] Plan rejected');
+    log('[PLANS SERVICE] Plan rejected');
     return data;
   },
 
   async completePlan(planId, userId) {
-    console.log('[PLANS SERVICE] completePlan called:', planId);
+    log('[PLANS SERVICE] completePlan called:', planId);
     await this.assertPlanBelongsToActivePartnership(planId, userId);
 
     const { data, error } = await supabase
@@ -194,16 +195,16 @@ export const plansService = {
       .single();
 
     if (error) {
-      console.log('[PLANS SERVICE] COMPLETE ERROR:', error);
+      log('[PLANS SERVICE] COMPLETE ERROR:', error);
       throw new Error('Complete failed: ' + error.message);
     }
 
-    console.log('[PLANS SERVICE] Plan completed');
+    log('[PLANS SERVICE] Plan completed');
     return data;
   },
 
   async deletePlan(planId, userId) {
-    console.log('[PLANS SERVICE] deletePlan called:', planId);
+    log('[PLANS SERVICE] deletePlan called:', planId);
     await this.assertPlanBelongsToActivePartnership(planId, userId);
 
     const { error } = await supabase
@@ -212,15 +213,15 @@ export const plansService = {
       .eq('id', planId);
 
     if (error) {
-      console.log('[PLANS SERVICE] DELETE ERROR:', error);
+      log('[PLANS SERVICE] DELETE ERROR:', error);
       throw new Error('Delete failed: ' + error.message);
     }
 
-    console.log('[PLANS SERVICE] Plan deleted successfully');
+    log('[PLANS SERVICE] Plan deleted successfully');
   },
 
   subscribeToPlans(partnershipId, callback) {
-    console.log('[PLANS SERVICE] Subscribing');
+    log('[PLANS SERVICE] Subscribing');
     return supabase
       .channel(`plans:${partnershipId}`)
       .on('postgres_changes', {

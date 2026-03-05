@@ -1,4 +1,5 @@
 import { supabase } from '../config/supabase';
+import { log } from '../utils/logger';
 
 export const SESSION_TYPES = {
   mood: {
@@ -52,28 +53,28 @@ export const sessionService = {
     }
     const index = Math.abs(hash) % SESSION_TYPE_KEYS.length;
     const sessionType = SESSION_TYPES[SESSION_TYPE_KEYS[index]];
-    console.log('[SESSION] getTodaySessionType:', { dateString, index, type: sessionType.type });
+    log('[SESSION] getTodaySessionType:', { dateString, index, type: sessionType.type });
     return sessionType;
   },
 
   getRandomSessionType() {
     const types = Object.values(SESSION_TYPES);
     const randomType = types[Math.floor(Math.random() * types.length)];
-    console.log('[SESSION] getRandomSessionType:', randomType.type);
+    log('[SESSION] getRandomSessionType:', randomType.type);
     return randomType;
   },
 
   async submitSession(partnershipId, userId, sessionType, answer) {
-    console.log('[SESSION] submitSession called:', { partnershipId, userId, sessionType, answer });
+    log('[SESSION] submitSession called:', { partnershipId, userId, sessionType, answer });
     
     const session = SESSION_TYPES[sessionType];
     if (!session) {
-      console.log('[SESSION] ERROR: Invalid session type:', sessionType);
+      log('[SESSION] ERROR: Invalid session type:', sessionType);
       throw new Error('Invalid session type');
     }
 
     const todayDate = getTodayDateString();
-    console.log('[SESSION] Inserting session with date:', todayDate);
+    log('[SESSION] Inserting session with date:', todayDate);
 
     const existingToday = await this.getUserSessionByDate(
       partnershipId,
@@ -102,11 +103,11 @@ export const sessionService = {
       .single();
 
     if (error) {
-      console.log('[SESSION] ERROR submitting:', error);
+      log('[SESSION] ERROR submitting:', error);
       throw error;
     }
     
-    console.log('[SESSION] Successfully submitted:', data);
+    log('[SESSION] Successfully submitted:', data);
     return data;
   },
 
@@ -115,7 +116,7 @@ export const sessionService = {
   },
 
   async getUserSessionByDate(partnershipId, userId, dateString, sessionType = null) {
-    console.log('[SESSION] getUserSessionByDate called:', { partnershipId, userId, sessionType, dateString });
+    log('[SESSION] getUserSessionByDate called:', { partnershipId, userId, sessionType, dateString });
 
     const runLookup = async ({ constrainPartnership }) => {
       let query = supabase
@@ -138,7 +139,7 @@ export const sessionService = {
         .limit(20);
 
       if (error) {
-        console.log('[SESSION] ERROR fetching user session rows:', error);
+        log('[SESSION] ERROR fetching user session rows:', error);
         throw error;
       }
 
@@ -149,24 +150,24 @@ export const sessionService = {
     // Primary path: session should belong to the currently loaded partnership.
     const strict = await runLookup({ constrainPartnership: true });
     if (strict) {
-      console.log('[SESSION] User session result (strict):', { id: strict.id, answer: strict.answer });
+      log('[SESSION] User session result (strict):', { id: strict.id, answer: strict.answer });
       return strict;
     }
 
     // Fallback for legacy data where duplicate active partnership rows exist and
     // each user may have posted under a different partnership_id.
     if (partnershipId) {
-      console.log('[SESSION] No strict user match; retrying without partnership_id filter');
+      log('[SESSION] No strict user match; retrying without partnership_id filter');
       const relaxed = await runLookup({ constrainPartnership: false });
       if (relaxed) {
-        console.log('[SESSION] User session result (relaxed):', { id: relaxed.id, answer: relaxed.answer });
+        log('[SESSION] User session result (relaxed):', { id: relaxed.id, answer: relaxed.answer });
       } else {
-        console.log('[SESSION] No user session found (strict or relaxed)');
+        log('[SESSION] No user session found (strict or relaxed)');
       }
       return relaxed;
     }
 
-    console.log('[SESSION] No user session found');
+    log('[SESSION] No user session found');
     return null;
   },
 
@@ -175,7 +176,7 @@ export const sessionService = {
   },
 
   subscribeToSessions(partnershipId, callback) {
-    console.log('[SESSION] Subscribing to sessions for partnership:', partnershipId);
+    log('[SESSION] Subscribing to sessions for partnership:', partnershipId);
     return supabase
       .channel(`sessions:${partnershipId}`)
       .on('postgres_changes', {
@@ -184,16 +185,16 @@ export const sessionService = {
         table: 'sessions',
         filter: `partnership_id=eq.${partnershipId}`,
       }, (payload) => {
-        console.log('[SESSION] Real-time update received:', payload);
+        log('[SESSION] Real-time update received:', payload);
         callback(payload);
       })
       .subscribe((status) => {
-        console.log('[SESSION] Subscription status:', status);
+        log('[SESSION] Subscription status:', status);
       });
   },
 
   subscribeToUserSessions(userId, callback) {
-    console.log('[SESSION] Subscribing to sessions for user:', userId);
+    log('[SESSION] Subscribing to sessions for user:', userId);
     return supabase
       .channel(`sessions:user:${userId}`)
       .on('postgres_changes', {
@@ -202,11 +203,11 @@ export const sessionService = {
         table: 'sessions',
         filter: `user_id=eq.${userId}`,
       }, (payload) => {
-        console.log('[SESSION] User real-time update received:', payload);
+        log('[SESSION] User real-time update received:', payload);
         callback(payload);
       })
       .subscribe((status) => {
-        console.log('[SESSION] User subscription status:', status);
+        log('[SESSION] User subscription status:', status);
       });
   },
 };

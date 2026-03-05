@@ -1,11 +1,12 @@
 import { supabase } from '../config/supabase';
+import { log } from '../utils/logger';
 import * as FileSystem from 'expo-file-system/legacy';
 import { decode } from 'base64-arraybuffer';
 import { withServiceTimeout } from './serviceTimeout';
 
 export const momentsService = {
   async uploadMoment(partnershipId, userId, imageUri, caption = '') {
-    console.log('[MOMENTS SERVICE] uploadMoment called');
+    log('[MOMENTS SERVICE] uploadMoment called');
     
     const base64 = await FileSystem.readAsStringAsync(imageUri, {
       encoding: 'base64',
@@ -24,7 +25,7 @@ export const momentsService = {
       });
 
     if (uploadError) {
-      console.log('[MOMENTS SERVICE] Upload error:', uploadError);
+      log('[MOMENTS SERVICE] Upload error:', uploadError);
       throw uploadError;
     }
 
@@ -44,16 +45,16 @@ export const momentsService = {
       .single();
 
     if (error) {
-      console.log('[MOMENTS SERVICE] Insert error:', error);
+      log('[MOMENTS SERVICE] Insert error:', error);
       throw error;
     }
     
-    console.log('[MOMENTS SERVICE] Moment created:', data.id);
+    log('[MOMENTS SERVICE] Moment created:', data.id);
     return data;
   },
 
   async getMoments(partnershipId, limit = 50) {
-    console.log('[MOMENTS SERVICE] getMoments called');
+    log('[MOMENTS SERVICE] getMoments called');
     
     const { data, error } = await withServiceTimeout(
       supabase
@@ -66,16 +67,16 @@ export const momentsService = {
     );
 
     if (error) {
-      console.log('[MOMENTS SERVICE] Fetch error:', error);
+      log('[MOMENTS SERVICE] Fetch error:', error);
       throw error;
     }
     
-    console.log('[MOMENTS SERVICE] Fetched:', data?.length, 'moments');
+    log('[MOMENTS SERVICE] Fetched:', data?.length, 'moments');
     return data;
   },
 
   async deleteMoment(momentId, imageUrl) {
-    console.log('[MOMENTS SERVICE] deleteMoment called:', momentId);
+    log('[MOMENTS SERVICE] deleteMoment called:', momentId);
 
     // Delete from database first
     const { error: dbError } = await supabase
@@ -84,25 +85,25 @@ export const momentsService = {
       .eq('id', momentId);
 
     if (dbError) {
-      console.log('[MOMENTS SERVICE] DELETE ERROR:', dbError);
+      log('[MOMENTS SERVICE] DELETE ERROR:', dbError);
       throw new Error('Delete failed: ' + dbError.message);
     }
 
-    console.log('[MOMENTS SERVICE] Database delete successful');
+    log('[MOMENTS SERVICE] Database delete successful');
 
     // Try to delete from storage (don't fail if this doesn't work)
     try {
       const urlParts = imageUrl.split('?')[0].split('/');
       const filePath = urlParts.slice(-2).join('/');
       await supabase.storage.from('moments').remove([filePath]);
-      console.log('[MOMENTS SERVICE] Storage delete successful');
+      log('[MOMENTS SERVICE] Storage delete successful');
     } catch (storageErr) {
-      console.log('[MOMENTS SERVICE] Storage delete failed (non-critical):', storageErr);
+      log('[MOMENTS SERVICE] Storage delete failed (non-critical):', storageErr);
     }
   },
 
   subscribeToMoments(partnershipId, callback) {
-    console.log('[MOMENTS SERVICE] Subscribing');
+    log('[MOMENTS SERVICE] Subscribing');
     return supabase
       .channel(`moments:${partnershipId}`)
       .on('postgres_changes', {

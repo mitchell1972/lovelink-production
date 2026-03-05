@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../config/supabase';
+import { log } from '../utils/logger';
 
 const FEATURE_KEYS = ['session', 'moments', 'pulse', 'plan'];
 
@@ -38,8 +39,8 @@ export const inAppAlertsService = {
         return defaultUnread();
       }
       return normalizeUnread(JSON.parse(raw));
-    } catch (error) {
-      console.log('[IN-APP ALERTS] getUnreadState error:', error?.message || error);
+    } catch (err) {
+      log('[IN-APP ALERTS] getUnreadState error:', err?.message || err);
       return defaultUnread();
     }
   },
@@ -83,8 +84,8 @@ export const inAppAlertsService = {
         return true;
       }
       return raw === 'true';
-    } catch (error) {
-      console.log('[IN-APP ALERTS] getVibrationEnabled error:', error?.message || error);
+    } catch (err) {
+      log('[IN-APP ALERTS] getVibrationEnabled error:', err?.message || err);
       return true;
     }
   },

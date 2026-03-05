@@ -1,0 +1,73 @@
+export default {
+  expo: {
+    name: "LoveLink",
+    slug: "lovelink",
+    version: "1.0.4",
+    orientation: "portrait",
+    icon: "./assets/icon.png",
+    userInterfaceStyle: "light",
+    splash: {
+      image: "./assets/splash.png",
+      resizeMode: "contain",
+      backgroundColor: "#6C63FF",
+    },
+    assetBundlePatterns: ["**/*"],
+    ios: {
+      supportsTablet: true,
+      bundleIdentifier: "com.mitchellagoma.lovelink",
+      buildNumber: "21",
+      infoPlist: {
+        NSCameraUsageDescription:
+          "LoveLink needs camera access to capture moments with your partner",
+        NSPhotoLibraryUsageDescription:
+          "LoveLink needs photo library access to share moments with your partner",
+        NSPhotoLibraryAddUsageDescription:
+          "LoveLink needs permission to save photos to your library",
+      },
+      config: {
+        usesNonExemptEncryption: false,
+      },
+    },
+    android: {
+      adaptiveIcon: {
+        foregroundImage: "./assets/adaptive-icon.png",
+        backgroundColor: "#6C63FF",
+      },
+      package: "com.mitchellagoma.lovelink.play2026",
+      versionCode: 4,
+      permissions: [
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.VIBRATE",
+        "android.permission.RECORD_AUDIO",
+      ],
+    },
+    web: {
+      favicon: "./assets/favicon.png",
+    },
+    plugins: [
+      [
+        "expo-image-picker",
+        {
+          photosPermission:
+            "LoveLink needs access to your photos to share moments with your partner",
+          cameraPermission:
+            "LoveLink needs camera access to capture moments with your partner",
+        },
+      ],
+      "expo-asset",
+      "expo-font",
+      "@react-native-community/datetimepicker",
+      "react-native-iap",
+    ],
+    extra: {
+      supabaseUrl: process.env.EXPO_PUBLIC_SUPABASE_URL || "",
+      supabaseAnonKey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || "",
+      eas: {
+        projectId: "79823d39-8bb4-4ccc-9891-079185e537b9",
+      },
+    },
+    owner: "mitchell.agoma",
+  },
+};

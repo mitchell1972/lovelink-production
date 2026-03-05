@@ -3,6 +3,7 @@ import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { supabase } from '../config/supabase';
+import { log, error } from '../utils/logger';
 
 // Configure notification behavior
 Notifications.setNotificationHandler({
@@ -16,10 +17,10 @@ Notifications.setNotificationHandler({
 export const notificationService = {
   // Register for push notifications and get token
   async registerForPushNotifications(userId) {
-    console.log('[NOTIFICATIONS] Registering...');
+    log('[NOTIFICATIONS] Registering...');
     
     if (!Device.isDevice) {
-      console.log('[NOTIFICATIONS] Must use physical device');
+      log('[NOTIFICATIONS] Must use physical device');
       return null;
     }
 
@@ -35,7 +36,7 @@ export const notificationService = {
       }
 
       if (finalStatus !== 'granted') {
-        console.log('[NOTIFICATIONS] Permission not granted');
+        log('[NOTIFICATIONS] Permission not granted');
         return null;
       }
 
@@ -44,7 +45,7 @@ export const notificationService = {
         Constants?.easConfig?.projectId;
 
       if (!projectId) {
-        console.log('[NOTIFICATIONS] Missing Expo projectId in app config');
+        log('[NOTIFICATIONS] Missing Expo projectId in app config');
         return null;
       }
 
@@ -53,7 +54,7 @@ export const notificationService = {
         projectId,
       });
 
-      console.log('[NOTIFICATIONS] Token:', token.data);
+      log('[NOTIFICATIONS] Token:', token.data);
 
       // Save token to database
       await this.savePushToken(userId, token.data);
@@ -69,40 +70,40 @@ export const notificationService = {
       }
 
       return token.data;
-    } catch (error) {
-      console.error('[NOTIFICATIONS] Registration error:', error);
+    } catch (err) {
+      error('[NOTIFICATIONS] Registration error:', err);
       return null;
     }
   },
 
   // Save push token to database
   async savePushToken(userId, token) {
-    console.log('[NOTIFICATIONS] Saving token for user:', userId);
+    log('[NOTIFICATIONS] Saving token for user:', userId);
     
-    const { error } = await supabase
+    const { error: saveErr } = await supabase
       .from('profiles')
       .update({ push_token: token })
       .eq('id', userId);
 
-    if (error) {
-      console.error('[NOTIFICATIONS] Save token error:', error);
+    if (saveErr) {
+      error('[NOTIFICATIONS] Save token error:', saveErr);
     }
   },
 
   // Send notification to partner
   async sendToPartner(partnerUserId, title, body, data = {}) {
-    console.log('[NOTIFICATIONS] Sending to partner:', partnerUserId);
+    log('[NOTIFICATIONS] Sending to partner:', partnerUserId);
 
     try {
       // Get partner's push token
-      const { data: profile, error } = await supabase
+      const { data: profile, error: fetchErr } = await supabase
         .from('profiles')
         .select('push_token')
         .eq('id', partnerUserId)
         .single();
 
-      if (error || !profile?.push_token) {
-        console.log('[NOTIFICATIONS] No push token for partner');
+      if (fetchErr || !profile?.push_token) {
+        log('[NOTIFICATIONS] No push token for partner');
         return;
       }
 
@@ -125,9 +126,9 @@ export const notificationService = {
         body: JSON.stringify(message),
       });
 
-      console.log('[NOTIFICATIONS] Sent successfully');
-    } catch (error) {
-      console.error('[NOTIFICATIONS] Send error:', error);
+      log('[NOTIFICATIONS] Sent successfully');
+    } catch (err) {
+      error('[NOTIFICATIONS] Send error:', err);
     }
   },
 

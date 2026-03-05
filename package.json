@@ -21,7 +21,6 @@
     "expo-clipboard": "~8.0.8",
     "expo-constants": "~18.0.13",
     "expo-crypto": "~15.0.8",
-    "expo-dev-client": "~6.0.20",
     "expo-device": "~8.0.10",
     "expo-file-system": "~19.0.21",
     "expo-font": "~14.0.11",
@@ -38,6 +37,7 @@
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
+    "expo-dev-client": "~6.0.20",
     "@playwright/test": "^1.58.2",
     "babel-jest": "^29.7.0",
     "babel-preset-expo": "~54.0.10",

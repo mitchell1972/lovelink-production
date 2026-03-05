@@ -2,6 +2,7 @@
 // Photo gallery with premium feature gating
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { log, error as logError } from '../utils/logger';
 import {
   View,
   Text,
@@ -49,8 +50,8 @@ export default function MomentsScreen({ onNavigate }) {
       setIsPremium(status.isPremium);
       const limits = await checkMomentsLimit(user.id, partnership?.id || null);
       setLimitInfo(limits);
-    } catch (error) {
-      console.error('Error checking premium:', error);
+    } catch (err) {
+      logError('Error checking premium:', err);
     }
   };
 
@@ -72,12 +73,12 @@ export default function MomentsScreen({ onNavigate }) {
       setLoadError('');
       const data = await momentsService.getMoments(partnership.id);
       setMoments(data || []);
-      checkPremiumAndLimits().catch((error) => {
-        console.error('Error checking premium after loading moments:', error);
+      checkPremiumAndLimits().catch((err) => {
+        logError('Error checking premium after loading moments:', err);
       });
-    } catch (error) {
-      console.error('Error loading moments:', error);
-      const message = isServiceTimeoutError(error)
+    } catch (err) {
+      logError('Error loading moments:', err);
+      const message = isServiceTimeoutError(err)
         ? 'Loading moments is taking too long. Please try again.'
         : 'Failed to load moments. Please try again.';
       setLoadError(message);
@@ -136,8 +137,8 @@ export default function MomentsScreen({ onNavigate }) {
           );
         }
       }
-    } catch (error) {
-      console.error('Error checking limits:', error);
+    } catch (err) {
+      logError('Error checking limits:', err);
     }
 
     // Show choice: Camera or Gallery
@@ -203,11 +204,11 @@ export default function MomentsScreen({ onNavigate }) {
             const myName = profile?.name || user?.user_metadata?.name || 'Your partner';
             await notificationService.notifyPartnerNewMoment(activePartnership?.partner?.id, myName);
           } catch (notifError) {
-            console.log('[MOMENTS] Notification send failed (non-blocking):', notifError?.message || notifError);
+            log('[MOMENTS] Notification send failed (non-blocking):', notifError?.message || notifError);
           }
         }
-      } catch (error) {
-        console.error('Upload error:', error);
+      } catch (err) {
+        logError('Upload error:', err);
         showAlert('Error', 'Failed to upload photo. Please try again.');
       } finally {
         setUploading(false);
@@ -261,7 +262,7 @@ export default function MomentsScreen({ onNavigate }) {
           setMoments(prev => prev.filter(m => m.id !== moment.id));
           setSelectedMoment(null);
           await checkPremiumAndLimits();
-        } catch (error) {
+        } catch (err) {
           showAlert('Error', 'Failed to delete photo.');
         }
       },

@@ -2,6 +2,7 @@
 // Premium subscription management service
 
 import { supabase } from '../config/supabase';
+import { error } from '../utils/logger';
 
 export const TRIAL_DAYS = 7;
 export const TRIAL_GATED_FEATURES = ['session', 'moments', 'pulse', 'plan'];
@@ -145,8 +146,8 @@ export const getPremiumStatus = async (userId) => {
     }
 
     return { isPremium: false, source: null, plan: null, since: null, expires: null };
-  } catch (error) {
-    console.error('Error getting premium status:', error);
+  } catch (err) {
+    error('Error getting premium status:', err);
     return { isPremium: false, source: null, plan: null, since: null, expires: null };
   }
 };
@@ -223,8 +224,8 @@ export const getTrialAccessStatus = async (userId) => {
       trialEndsAt: trialEndsAt.toISOString(),
       reason: isInTrial ? 'trial' : 'expired',
     };
-  } catch (error) {
-    console.error('Error getting trial access status:', error);
+  } catch (err) {
+    error('Error getting trial access status:', err);
     return {
       hasAccess: false,
       isPremium: false,
@@ -291,8 +292,8 @@ export const checkMomentsLimit = async (userId, partnershipId = null) => {
       limit: limits.momentsLimit,
       isPremium: limits.momentsLimit === Infinity,
     };
-  } catch (error) {
-    console.error('Error checking moments limit:', error);
+  } catch (err) {
+    error('Error checking moments limit:', err);
     return { allowed: true, current: 0, limit: 10 };
   }
 };

@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import { log } from '../utils/logger';
 import { authService } from '../services/authService';
 import { profileService } from '../services/profileService';
 import { partnerService } from '../services/partnerService';
@@ -61,7 +62,7 @@ export const AuthProvider = ({ children }) => {
         await loadUserData(session.user.id);
       }
     } catch (err) {
-      console.error('Error checking user:', err);
+      log('Error checking user:', err);
     } finally {
       setLoading(false);
     }
@@ -91,10 +92,10 @@ export const AuthProvider = ({ children }) => {
       notificationService
         .registerForPushNotifications(userId)
         .catch((notifErr) => {
-          console.log('[AUTH] Push notification registration skipped:', notifErr?.message || notifErr);
+          log('[AUTH] Push notification registration skipped:', notifErr?.message || notifErr);
         });
     } catch (err) {
-      console.error('Error loading user data:', err);
+      log('Error loading user data:', err);
     } finally {
       loadingUserDataRef.current = false;
     }
@@ -186,12 +187,23 @@ export const AuthProvider = ({ children }) => {
         return optimistic;
       }
 
+      // When called without a link hint (e.g. from navigation), a null DB read
+      // may be a transient failure. Preserve the current partnership instead of
+      // kicking the user back to the link screen.
+      if (!hasLinkHint) {
+        return partnership;
+      }
+
       setPartnership(null);
       return null;
     } catch (err) {
-      console.error('Error refreshing partnership:', err);
+      log('Error refreshing partnership:', err);
       if (optimistic) {
         return optimistic;
+      }
+      // Same transient-failure guard for the error path.
+      if (!hasLinkHint) {
+        return partnership;
       }
       return null;
     }

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, ScrollView, StyleSheet, Alert, Linking, Switch, Keyboard, Platform, InputAccessoryView } from 'react-native';
+import { error } from '../utils/logger';
 import * as Clipboard from 'expo-clipboard';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../config/supabase';
@@ -30,7 +31,7 @@ export const SettingsScreen = ({ onNavigate }) => {
       const code = await partnerService.getActiveCode(user.id);
       setLinkCode(code);
     } catch (err) {
-      console.error('Error loading link code:', err);
+      error('Error loading link code:', err);
     } finally {
       setLoadingCode(false);
     }
@@ -41,7 +42,7 @@ export const SettingsScreen = ({ onNavigate }) => {
       const enabled = await inAppAlertsService.getVibrationEnabled(user.id);
       setVibrationEnabled(enabled);
     } catch (err) {
-      console.error('Error loading alert preferences:', err);
+      error('Error loading alert preferences:', err);
     }
   };
 
@@ -50,7 +51,7 @@ export const SettingsScreen = ({ onNavigate }) => {
     try {
       await inAppAlertsService.setVibrationEnabled(user.id, enabled);
     } catch (err) {
-      console.error('Error saving vibration preference:', err);
+      error('Error saving vibration preference:', err);
       Alert.alert('Error', 'Could not save vibration preference.');
     }
   };
@@ -88,7 +89,7 @@ export const SettingsScreen = ({ onNavigate }) => {
 
               Alert.alert('Success ✅', 'New code generated! Share it with your partner.');
             } catch (err) {
-              console.error('Error generating code:', err);
+              error('Error generating code:', err);
               Alert.alert('Error', err?.message || 'Failed to generate new code');
             } finally {
               setLoadingCode(false);
@@ -131,7 +132,7 @@ export const SettingsScreen = ({ onNavigate }) => {
 
       Alert.alert('Success', 'Your name has been updated!');
     } catch (err) {
-      console.error('Update name error:', err);
+      error('Update name error:', err);
       Alert.alert('Error', err.message || 'Failed to update name');
     } finally {
       setLoading(false);
@@ -186,14 +187,14 @@ export const SettingsScreen = ({ onNavigate }) => {
             setLoading(true);
             try {
               // Delete user data via database function
-              const { error } = await supabase.rpc('delete_user_account');
-              
-              if (error) throw error;
+              const { error: deleteErr } = await supabase.rpc('delete_user_account');
+
+              if (deleteErr) throw deleteErr;
               
               await signOut();
               Alert.alert('Account Deleted', 'Your account has been permanently deleted.');
             } catch (err) {
-              console.error('Delete account error:', err);
+              error('Delete account error:', err);
               Alert.alert('Error', 'Failed to delete account. Please contact support.');
             } finally {
               setLoading(false);

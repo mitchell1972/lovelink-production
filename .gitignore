@@ -2,6 +2,15 @@
 node_modules/
 .DS_Store
 
-# Optional: keep local env secrets out of git
+# Environment secrets
 .env
 .env.*
+
+# Test artifacts
+test-results/
+coverage/
+
+# Build artifacts
+dist/
+build/
+*.log

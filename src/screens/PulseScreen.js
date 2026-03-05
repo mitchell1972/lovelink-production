@@ -2,6 +2,7 @@
 // Send heartbeat pulses to partner with premium patterns
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { log, error as logError } from '../utils/logger';
 import {
   View,
   Text,
@@ -73,8 +74,8 @@ export default function PulseScreen({ onNavigate }) {
       setIsPremium(status.isPremium);
       const patterns = await getAvailablePulsePatterns(user.id);
       setAvailablePatterns(patterns);
-    } catch (error) {
-      console.error('Error loading patterns:', error);
+    } catch (err) {
+      logError('Error loading patterns:', err);
       setAvailablePatterns(['heartbeat']);
     }
   }, [user?.id]);
@@ -93,8 +94,8 @@ export default function PulseScreen({ onNavigate }) {
       ]);
       setMyPulses(myData || []);
       setReceivedPulses(receivedData || []);
-    } catch (error) {
-      console.error('Error loading pulses:', error);
+    } catch (err) {
+      logError('Error loading pulses:', err);
     }
   }, [user?.id, partnership?.id]);
 
@@ -155,15 +156,15 @@ export default function PulseScreen({ onNavigate }) {
         const myName = profile?.name || user?.user_metadata?.name || 'Your partner';
         await notificationService.notifyPartnerPulse(activePartnership?.partner?.id, myName);
       } catch (notifError) {
-        console.log('[PULSE] Notification send failed (non-blocking):', notifError?.message || notifError);
+        log('[PULSE] Notification send failed (non-blocking):', notifError?.message || notifError);
       }
 
       showAlert(
         pattern.icon + ' Pulse Sent!',
         'Your partner will feel your ' + pattern.name.toLowerCase()
       );
-    } catch (error) {
-      console.error('Error sending pulse:', error);
+    } catch (err) {
+      logError('Error sending pulse:', err);
       showAlert('Error', 'Failed to send pulse. Please try again.');
     } finally {
       setSending(false);
@@ -194,7 +195,7 @@ export default function PulseScreen({ onNavigate }) {
           await pulseService.deletePulse(pulse.id, user.id);
           await loadPulses();
           showAlert('Deleted', 'Pulse removed from history');
-        } catch (error) {
+        } catch (err) {
           showAlert('Error', 'Failed to delete pulse');
         }
       },

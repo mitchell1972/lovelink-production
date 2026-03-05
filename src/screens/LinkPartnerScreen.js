@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, Alert, Keyboard, StyleSheet, Platform, InputAccessoryView } from 'react-native';
+import { error } from '../utils/logger';
 import * as Clipboard from 'expo-clipboard';
 import { useAuth } from '../contexts/AuthContext';
 import { partnerService } from '../services/partnerService';
@@ -24,7 +25,7 @@ export const LinkPartnerScreen = () => {
       const code = await partnerService.getActiveCode(user.id);
       setMyCode(code);
     } catch (err) {
-      console.error('Error loading code:', err);
+      error('Error loading code:', err);
       Alert.alert('Error', 'Failed to generate partner code');
     } finally {
       setLoadingCode(false);

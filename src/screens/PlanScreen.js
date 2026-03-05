@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { log } from '../utils/logger';
 import {
   View,
   Text,
@@ -48,13 +49,13 @@ export const PlanScreen = ({ onNavigate }) => {
       return undefined;
     }
 
-    console.log('[PLAN SCREEN] Mounted');
+    log('[PLAN SCREEN] Mounted');
     loadPlans();
     
     const subscription = plansService.subscribeToPlans(
       partnership.id,
       (payload) => {
-        console.log('[PLAN SCREEN] Real-time update:', payload.eventType);
+        log('[PLAN SCREEN] Real-time update:', payload.eventType);
         loadPlans();
       }
     );
@@ -69,7 +70,7 @@ export const PlanScreen = ({ onNavigate }) => {
       return;
     }
 
-    console.log('[PLAN SCREEN] loadPlans called');
+    log('[PLAN SCREEN] loadPlans called');
     setLoading(true);
     setLoadError('');
     try {
@@ -80,7 +81,7 @@ export const PlanScreen = ({ onNavigate }) => {
         await handleDisconnectedPartnership(err.message);
         return;
       }
-      console.log('[PLAN SCREEN] ERROR loading plans:', err);
+      log('[PLAN SCREEN] ERROR loading plans:', err);
       const message = isServiceTimeoutError(err)
         ? 'Loading plans is taking too long. Please try again.'
         : (err?.message || 'Failed to load plans.');
@@ -143,7 +144,7 @@ export const PlanScreen = ({ onNavigate }) => {
   };
 
   const handleAddPlan = async () => {
-    console.log('[PLAN SCREEN] handleAddPlan called');
+    log('[PLAN SCREEN] handleAddPlan called');
     if (!title.trim()) {
       showAlert('Error', 'Please enter a plan title');
       return;
@@ -168,12 +169,12 @@ export const PlanScreen = ({ onNavigate }) => {
         const myName = user?.user_metadata?.name || 'Your partner';
         await notificationService.notifyPartnerNewPlan(partnership?.partner?.id, myName, title.trim());
       } catch (notifError) {
-        console.log('[PLAN SCREEN] Notification send failed (non-blocking):', notifError?.message || notifError);
+        log('[PLAN SCREEN] Notification send failed (non-blocking):', notifError?.message || notifError);
       }
       
       showAlert('Plan Created! 📅', `Waiting for ${partnership?.partner?.name || 'your partner'} to confirm.`);
     } catch (err) {
-      console.log('[PLAN SCREEN] ERROR creating plan:', err);
+      log('[PLAN SCREEN] ERROR creating plan:', err);
       if (err?.code === 'PARTNERSHIP_DISCONNECTED') {
         await handleDisconnectedPartnership(err.message);
         return;
@@ -185,7 +186,7 @@ export const PlanScreen = ({ onNavigate }) => {
   };
 
   const handleConfirm = async (plan) => {
-    console.log('[PLAN SCREEN] handleConfirm called');
+    log('[PLAN SCREEN] handleConfirm called');
     try {
       await plansService.confirmPlan(plan.id, user.id);
 
@@ -193,7 +194,7 @@ export const PlanScreen = ({ onNavigate }) => {
         const myName = user?.user_metadata?.name || 'Your partner';
         await notificationService.notifyPartnerPlanConfirmed(partnership?.partner?.id, myName, plan.title);
       } catch (notifError) {
-        console.log('[PLAN SCREEN] Notification send failed (non-blocking):', notifError?.message || notifError);
+        log('[PLAN SCREEN] Notification send failed (non-blocking):', notifError?.message || notifError);
       }
 
       showAlert('Plan Confirmed! 🎉', 'You both agreed to this plan!');
@@ -208,7 +209,7 @@ export const PlanScreen = ({ onNavigate }) => {
   };
 
   const handleReject = async (plan) => {
-    console.log('[PLAN SCREEN] handleReject called');
+    log('[PLAN SCREEN] handleReject called');
     try {
       await plansService.rejectPlan(plan.id, user.id);
       showAlert('Plan Rejected', 'Maybe suggest a different idea?');
@@ -223,7 +224,7 @@ export const PlanScreen = ({ onNavigate }) => {
   };
 
   const handleComplete = async (plan) => {
-    console.log('[PLAN SCREEN] handleComplete called');
+    log('[PLAN SCREEN] handleComplete called');
     try {
       await plansService.completePlan(plan.id, user.id);
       showAlert('Done! ✨', 'Hope you had a great time!');
@@ -238,7 +239,7 @@ export const PlanScreen = ({ onNavigate }) => {
   };
 
   const handleDelete = (plan) => {
-    console.log('[PLAN SCREEN] handleDelete called');
+    log('[PLAN SCREEN] handleDelete called');
     showConfirm({
       title: 'Delete Plan',
       message: `Are you sure you want to delete "${plan.title}"?`,

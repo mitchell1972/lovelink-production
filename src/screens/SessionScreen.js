@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, Alert, Modal, ScrollView, TouchableOpacity, Keyboard, Platform, InputAccessoryView } from 'react-native';
+import { log } from '../utils/logger';
 import { useAuth } from '../contexts/AuthContext';
 import { sessionService } from '../services/sessionService';
 import { notificationService } from '../services/notificationService';
@@ -48,27 +49,27 @@ export const SessionScreen = ({ onNavigate }) => {
   const partnerName = partnership?.partner?.name || 'your partner';
 
   useEffect(() => {
-    console.log('[SCREEN] SessionScreen mounted');
-    console.log('[SCREEN] User:', user?.id);
-    console.log('[SCREEN] Partnership:', partnership?.id);
-    console.log('[SCREEN] Partner:', partnership?.partner?.id, partnership?.partner?.name);
+    log('[SCREEN] SessionScreen mounted');
+    log('[SCREEN] User:', user?.id);
+    log('[SCREEN] Partnership:', partnership?.id);
+    log('[SCREEN] Partner:', partnership?.partner?.id, partnership?.partner?.name);
     loadSessionForDate(selectedDate);
   }, []);
 
   useEffect(() => {
     if (session?.type && selectedDate) {
-      console.log('[SCREEN] Loading sessions for date:', selectedDate.dateString);
+      log('[SCREEN] Loading sessions for date:', selectedDate.dateString);
       checkMySession(selectedDate.dateString);
       checkPartnerSession(selectedDate.dateString);
     }
   }, [session?.type, selectedDate.dateString, partnership?.id, partnership?.partner?.id, user?.id]);
 
   const loadSessionForDate = (dateObj) => {
-    console.log('[SCREEN] loadSessionForDate called for:', dateObj.dateString);
+    log('[SCREEN] loadSessionForDate called for:', dateObj.dateString);
 
     const sessionType = getSessionTypeForDate(dateObj);
     
-    console.log('[SCREEN] Session type for date:', sessionType.type);
+    log('[SCREEN] Session type for date:', sessionType.type);
     setSession(sessionType);
     setAnswer('');
     setSubmitted(false);
@@ -77,7 +78,7 @@ export const SessionScreen = ({ onNavigate }) => {
   };
 
   const handleDateSelect = (dateObj) => {
-    console.log('[SCREEN] Date selected:', dateObj.label, dateObj.dateString);
+    log('[SCREEN] Date selected:', dateObj.label, dateObj.dateString);
     setSelectedDate(dateObj);
     setShowDatePicker(false);
     loadSessionForDate(dateObj);
@@ -128,10 +129,10 @@ export const SessionScreen = ({ onNavigate }) => {
   };
 
   const checkPartnerSession = async (dateString) => {
-    console.log('[SCREEN] checkPartnerSession called for date:', dateString);
+    log('[SCREEN] checkPartnerSession called for date:', dateString);
     
     if (!partnership?.partner?.id) {
-      console.log('[SCREEN] No partner ID available');
+      log('[SCREEN] No partner ID available');
       return;
     }
     
@@ -143,23 +144,23 @@ export const SessionScreen = ({ onNavigate }) => {
       );
       
       if (partnerSession?.answer) {
-        console.log('[SCREEN] Partner answer found:', partnerSession.answer);
+        log('[SCREEN] Partner answer found:', partnerSession.answer);
         setPartnerAnswer(partnerSession.answer);
       } else {
-        console.log('[SCREEN] No partner answer found');
+        log('[SCREEN] No partner answer found');
         setPartnerAnswer(null);
       }
     } catch (err) {
-      console.log('[SCREEN] Error in checkPartnerSession:', err);
+      log('[SCREEN] Error in checkPartnerSession:', err);
       setPartnerAnswer(null);
     }
   };
 
   const checkMySession = async (dateString) => {
-    console.log('[SCREEN] checkMySession called for date:', dateString);
+    log('[SCREEN] checkMySession called for date:', dateString);
     
     if (!user?.id) {
-      console.log('[SCREEN] No user ID available');
+      log('[SCREEN] No user ID available');
       return;
     }
     
@@ -171,16 +172,16 @@ export const SessionScreen = ({ onNavigate }) => {
       );
       
       if (mySession) {
-        console.log('[SCREEN] My previous answer found:', mySession.answer);
+        log('[SCREEN] My previous answer found:', mySession.answer);
         setAnswer(mySession.answer);
         setSubmitted(true);
         applySessionFromSavedRow(mySession);
       } else {
-        console.log('[SCREEN] No previous answer found');
+        log('[SCREEN] No previous answer found');
         setSubmitted(false);
       }
     } catch (err) {
-      console.log('[SCREEN] Error in checkMySession:', err);
+      log('[SCREEN] Error in checkMySession:', err);
     }
   };
 
@@ -221,7 +222,7 @@ export const SessionScreen = ({ onNavigate }) => {
   }, [isViewingHistory, partnerAnswer, session?.type, selectedDate.dateString, partnership?.id, partnership?.partner?.id]);
 
   const handleSubmit = async () => {
-    console.log('[SCREEN] handleSubmit called with answer:', answer);
+    log('[SCREEN] handleSubmit called with answer:', answer);
     
     if (!answer.trim()) {
       Alert.alert('Please enter or select an answer');
@@ -249,27 +250,27 @@ export const SessionScreen = ({ onNavigate }) => {
 
     setLoading(true);
     try {
-      console.log('[SCREEN] Submitting session...');
+      log('[SCREEN] Submitting session...');
       await sessionService.submitSession(
         activePartnership.id,
         user.id,
         session.type,
         answer.trim()
       );
-      console.log('[SCREEN] Session submitted successfully');
+      log('[SCREEN] Session submitted successfully');
       setSubmitted(true);
 
       try {
         const myName = user?.user_metadata?.name || 'Your partner';
         await notificationService.notifyPartnerSessionComplete(activePartnership?.partner?.id, myName);
       } catch (notifError) {
-        console.log('[SCREEN] Notification send failed (non-blocking):', notifError?.message || notifError);
+        log('[SCREEN] Notification send failed (non-blocking):', notifError?.message || notifError);
       }
 
       Alert.alert('Submitted! 💕', 'Your partner will see your response.');
       await checkPartnerSession(selectedDate.dateString);
     } catch (err) {
-      console.log('[SCREEN] Error submitting:', err);
+      log('[SCREEN] Error submitting:', err);
       if (err?.code === 'SESSION_ALREADY_SUBMITTED') {
         setSubmitted(true);
         if (err?.existing?.answer) {
@@ -286,14 +287,14 @@ export const SessionScreen = ({ onNavigate }) => {
   };
 
   const refreshPartnerAnswer = () => {
-    console.log('[SCREEN] refreshPartnerAnswer called');
+    log('[SCREEN] refreshPartnerAnswer called');
     if (session?.type) {
       checkPartnerSession(selectedDate.dateString);
     }
   };
 
   if (!session) {
-    console.log('[SCREEN] No session loaded yet');
+    log('[SCREEN] No session loaded yet');
     return null;
   }
 
@@ -335,7 +336,7 @@ export const SessionScreen = ({ onNavigate }) => {
                 title={option}
                 variant={answer === option ? 'secondary' : 'primary'}
                 onPress={() => {
-                  console.log('[SCREEN] Option selected:', option);
+                  log('[SCREEN] Option selected:', option);
                   setAnswer(option);
                 }}
                 style={styles.optionButton}
