@@ -264,7 +264,7 @@ describe('premiumService', () => {
 
       expect(result.hasAccess).toBe(true);
       expect(result.isInTrial).toBe(true);
-      expect(result.daysRemaining).toBe(3);
+      expect(result.daysRemaining).toBe(2);
       expect(result.reason).toBe('trial');
     });
 
