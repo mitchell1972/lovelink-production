@@ -2,7 +2,7 @@ export default {
   expo: {
     name: "LoveLink",
     slug: "lovelink",
-    version: "1.0.5",
+    version: "1.0.6",
     orientation: "portrait",
     icon: "./assets/icon.png",
     userInterfaceStyle: "light",
@@ -15,7 +15,7 @@ export default {
     ios: {
       supportsTablet: true,
       bundleIdentifier: "com.mitchellagoma.lovelink",
-      buildNumber: "23",
+      buildNumber: "24",
       infoPlist: {
         NSCameraUsageDescription:
           "LoveLink needs camera access to capture moments with your partner",

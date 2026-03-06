@@ -363,6 +363,47 @@ export const partnerService = {
   },
 
   /**
+   * Verify that the partnership is still valid by checking whether either
+   * partner has regenerated their code since the partnership was created.
+   * Returns { valid: boolean, reason?: string }.
+   */
+  async verifyPartnershipCodeValidity(partnershipId) {
+    // Primary: server-side RPC that also auto-ends stale partnerships.
+    const { data, error } = await supabase.rpc(
+      'verify_partnership_code_validity',
+      { p_partnership_id: partnershipId }
+    );
+
+    if (!error && data) {
+      return data; // { valid: boolean, reason?: string }
+    }
+
+    // RPC not deployed yet — fall back to checking partnership status.
+    if (
+      error?.code === 'PGRST202' ||
+      error?.code === '42883'
+    ) {
+      log('[PARTNER] verify_partnership_code_validity RPC not found, using status fallback');
+      const { data: row, error: fetchErr } = await supabase
+        .from('partnerships')
+        .select('id, status')
+        .eq('id', partnershipId)
+        .eq('status', 'active')
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+
+      return {
+        valid: !!row?.id,
+        reason: row?.id ? undefined : 'Partnership is no longer active',
+      };
+    }
+
+    if (error) throw error;
+    return { valid: false, reason: 'Unknown verification error' };
+  },
+
+  /**
    * End a partnership
    */
   async endPartnership(partnershipId) {

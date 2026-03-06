@@ -209,6 +209,35 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // Verify partnership code validity before any communication action.
+  // If the partner has regenerated their code the partnership is ended
+  // and the user is returned to the LinkPartnerScreen.
+  const verifyPartnership = async () => {
+    if (!user || !partnership?.id) return null;
+
+    try {
+      const result = await partnerService.verifyPartnershipCodeValidity(partnership.id);
+      if (!result.valid) {
+        log('[AUTH] Partnership code invalid:', result.reason);
+        setPartnership(null);
+        return null;
+      }
+
+      // Code still valid — refresh partnership data for freshness.
+      const latest = await partnerService.getPartnership(user.id);
+      if (latest) {
+        setPartnership(latest);
+        return latest;
+      }
+      setPartnership(null);
+      return null;
+    } catch (err) {
+      log('[AUTH] verifyPartnership error:', err);
+      // On error fall back to a normal refresh so we don't block the user.
+      return refreshPartnership();
+    }
+  };
+
   const value = {
     user,
     profile,
@@ -221,6 +250,7 @@ export const AuthProvider = ({ children }) => {
     signIn,
     signOut,
     refreshPartnership,
+    verifyPartnership,
     refreshProfile: () => user && loadUserData(user.id),
   };
 

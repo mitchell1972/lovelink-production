@@ -58,7 +58,7 @@ const ALL_PULSE_PATTERNS = {
 };
 
 export default function PulseScreen({ onNavigate }) {
-  const { user, profile, partnership, refreshPartnership } = useAuth();
+  const { user, profile, partnership, refreshPartnership, verifyPartnership } = useAuth();
   const [sending, setSending] = useState(false);
   const [myPulses, setMyPulses] = useState([]);
   const [receivedPulses, setReceivedPulses] = useState([]);
@@ -136,9 +136,12 @@ export default function PulseScreen({ onNavigate }) {
   };
 
   const handleSendPulse = async () => {
-    const activePartnership = await refreshPartnership();
+    const activePartnership = await verifyPartnership();
     if (!activePartnership?.id) {
-      showAlert('No Partner', 'Connect with your partner first!');
+      showAlert(
+        'Partner Changed',
+        'Your previous connection is no longer active. Enter a partner code to reconnect.'
+      );
       return;
     }
 
@@ -184,7 +187,7 @@ export default function PulseScreen({ onNavigate }) {
       destructive: true,
       onConfirm: async () => {
         try {
-          const activePartnership = await refreshPartnership();
+          const activePartnership = await verifyPartnership();
           if (!activePartnership?.id) {
             showAlert(
               'Partner Changed',

@@ -1,5 +1,6 @@
 import { supabase } from '../config/supabase';
 import { log } from '../utils/logger';
+import { partnerService } from './partnerService';
 import { withServiceTimeout } from './serviceTimeout';
 
 // Keep in sync with DB check constraints in supabase-schema.sql
@@ -9,6 +10,24 @@ export const VIBE_OPTIONS = ['Casual', 'Romantic', 'Adventurous', 'Relaxing'];
 export const plansService = {
   async assertCurrentActivePartnership(partnershipId, userId, options = {}) {
     const { enforceExpected = true } = options;
+
+    // Verify code validity before checking partnership status.
+    if (partnershipId) {
+      try {
+        const validity = await partnerService.verifyPartnershipCodeValidity(partnershipId);
+        if (!validity.valid) {
+          const err = new Error(
+            validity.reason || 'Your partner regenerated their code. Please reconnect.'
+          );
+          err.code = 'PARTNERSHIP_DISCONNECTED';
+          throw err;
+        }
+      } catch (codeErr) {
+        if (codeErr.code === 'PARTNERSHIP_DISCONNECTED') throw codeErr;
+        log('[PLANS SERVICE] Code validity check failed, continuing with status check:', codeErr?.message);
+      }
+    }
+
     const activePartnershipId = await this.getCurrentActivePartnershipId(userId);
 
     if (!activePartnershipId) {
@@ -207,14 +226,22 @@ export const plansService = {
     log('[PLANS SERVICE] deletePlan called:', planId);
     await this.assertPlanBelongsToActivePartnership(planId, userId);
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('plans')
       .delete()
-      .eq('id', planId);
+      .eq('id', planId)
+      .select();
 
     if (error) {
       log('[PLANS SERVICE] DELETE ERROR:', error);
       throw new Error('Delete failed: ' + error.message);
+    }
+
+    if (!data || data.length === 0) {
+      log('[PLANS SERVICE] DELETE returned 0 rows — likely RLS policy blocked it');
+      throw new Error(
+        'Could not delete this plan. You may only be able to delete plans you created.'
+      );
     }
 
     log('[PLANS SERVICE] Plan deleted successfully');

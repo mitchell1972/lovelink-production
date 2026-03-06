@@ -6,6 +6,9 @@ node_modules/
 .env
 .env.*
 
+# Google Play service account key (sensitive)
+google-play-service-account.json
+
 # Test artifacts
 test-results/
 coverage/

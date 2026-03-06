@@ -35,7 +35,7 @@ const EMPTY_UNREAD = {
 
 // Main app content with navigation
 const AppContent = () => {
-  const { user, partnership, loading, isAuthenticated, isPaired, refreshPartnership } = useAuth();
+  const { user, partnership, loading, isAuthenticated, isPaired, refreshPartnership, verifyPartnership } = useAuth();
   const [authScreen, setAuthScreen] = useState('signup');
   const [currentScreen, setCurrentScreen] = useState('home');
   const [unreadIndicators, setUnreadIndicators] = useState(EMPTY_UNREAD);
@@ -43,7 +43,8 @@ const AppContent = () => {
   const handleNavigate = useCallback(
     async (screen) => {
       if (FEATURE_SCREEN_IDS.includes(screen) && user?.id) {
-        const latestPartnership = await refreshPartnership();
+        // Verify code validity before entering any feature screen.
+        const latestPartnership = await verifyPartnership();
         if (!latestPartnership?.id) {
           Alert.alert(
             'Partner Changed',
@@ -62,7 +63,7 @@ const AppContent = () => {
         });
       }
     },
-    [refreshPartnership, user?.id]
+    [verifyPartnership, user?.id]
   );
 
   // Expose navigation for automated testing (dev only)

@@ -29,7 +29,7 @@ const { width } = Dimensions.get('window');
 const imageSize = (width - 48) / 3;
 
 export default function MomentsScreen({ onNavigate }) {
-  const { user, profile, partnership, refreshPartnership } = useAuth();
+  const { user, profile, partnership, refreshPartnership, verifyPartnership } = useAuth();
   const [moments, setMoments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -103,7 +103,7 @@ export default function MomentsScreen({ onNavigate }) {
   };
 
   const handleAddMoment = async () => {
-    const activePartnership = await refreshPartnership();
+    const activePartnership = await verifyPartnership();
     if (!activePartnership?.id) {
       showAlert(
         'Partner Changed',
@@ -250,7 +250,7 @@ export default function MomentsScreen({ onNavigate }) {
       destructive: true,
       onConfirm: async () => {
         try {
-          const activePartnership = await refreshPartnership();
+          const activePartnership = await verifyPartnership();
           if (!activePartnership?.id) {
             showAlert(
               'Partner Changed',

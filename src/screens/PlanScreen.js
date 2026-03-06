@@ -19,7 +19,7 @@ import { showAlert, showConfirm } from '../services/webAlert';
 import { Card, Heading, Subheading, Input, Button } from '../components/ui';
 
 export const PlanScreen = ({ onNavigate }) => {
-  const { user, partnership, refreshPartnership } = useAuth();
+  const { user, partnership, refreshPartnership, verifyPartnership } = useAuth();
   const [plans, setPlans] = useState([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
@@ -33,7 +33,7 @@ export const PlanScreen = ({ onNavigate }) => {
   const [vibe, setVibe] = useState('Casual');
   const titleInputAccessoryViewId = 'plan-title-input-accessory';
   const handleDisconnectedPartnership = async (message = null) => {
-    await refreshPartnership();
+    await verifyPartnership();
     showAlert(
       'Partner Changed',
       message || 'Your partner connection is no longer active. Please reconnect.'
@@ -150,9 +150,19 @@ export const PlanScreen = ({ onNavigate }) => {
       return;
     }
 
+    // Verify code validity before communicating with partner.
+    const activePartnership = await verifyPartnership();
+    if (!activePartnership?.id) {
+      showAlert(
+        'Partner Changed',
+        'Your previous connection is no longer active. Enter a partner code to reconnect.'
+      );
+      return;
+    }
+
     setLoading(true);
     try {
-      await plansService.createPlan(partnership.id, user.id, {
+      await plansService.createPlan(activePartnership.id, user.id, {
         title: title.trim(),
         scheduledDate: toISOString(selectedDate),
         budget,
@@ -167,12 +177,12 @@ export const PlanScreen = ({ onNavigate }) => {
 
       try {
         const myName = user?.user_metadata?.name || 'Your partner';
-        await notificationService.notifyPartnerNewPlan(partnership?.partner?.id, myName, title.trim());
+        await notificationService.notifyPartnerNewPlan(activePartnership?.partner?.id, myName, title.trim());
       } catch (notifError) {
         log('[PLAN SCREEN] Notification send failed (non-blocking):', notifError?.message || notifError);
       }
-      
-      showAlert('Plan Created! 📅', `Waiting for ${partnership?.partner?.name || 'your partner'} to confirm.`);
+
+      showAlert('Plan Created! 📅', `Waiting for ${activePartnership?.partner?.name || 'your partner'} to confirm.`);
     } catch (err) {
       log('[PLAN SCREEN] ERROR creating plan:', err);
       if (err?.code === 'PARTNERSHIP_DISCONNECTED') {
