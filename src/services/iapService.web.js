@@ -13,6 +13,8 @@ class IAPServiceWeb {
   async initialize() { return false; }
   async getProducts() { return []; }
   getProductForPlan() { return null; }
+  hasSevenDayFreeTrial() { return false; }
+  async isEligibleForSevenDayFreeTrial() { return false; }
   async purchaseSubscription() { return { success: false, error: 'IAP not available on web' }; }
   async restorePurchases() { return []; }
   async checkActiveSubscription() { return { isActive: false }; }
@@ -21,7 +23,7 @@ class IAPServiceWeb {
   removeListeners() {}
   async endConnection() {}
   getProductPrice(productId) {
-    return productId?.includes('yearly') ? '£39.99' : '£3.99';
+    return productId?.includes('yearly') ? '£39.99' : '£4.79';
   }
   getProduct() { return null; }
 }
@@ -31,6 +33,9 @@ export const initializeIAP = () => iapService.initialize();
 export const getProducts = () => iapService.getProducts();
 export const purchaseSubscription = (productId) => iapService.purchaseSubscription(productId);
 export const restorePurchases = () => iapService.restorePurchases();
+export const hasSevenDayFreeTrial = (product) => iapService.hasSevenDayFreeTrial(product);
+export const isEligibleForSevenDayFreeTrial = (product) =>
+  iapService.isEligibleForSevenDayFreeTrial(product);
 export const checkActiveSubscription = () => iapService.checkActiveSubscription();
 export const savePurchaseToDatabase = (userId, purchase, plan) =>
   iapService.savePurchaseToDatabase(userId, purchase, plan);

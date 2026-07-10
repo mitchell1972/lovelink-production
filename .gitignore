@@ -1,4 +1,5 @@
 .expo/
+supabase/.temp/
 node_modules/
 .DS_Store
 
