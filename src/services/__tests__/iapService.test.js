@@ -35,6 +35,8 @@ const {
   PRODUCT_IDS,
 } = require('../iapService');
 
+const TEST_ACCOUNT_TOKEN = 'test-account-token';
+
 const subscription = (productId) => ({
   productId,
   transactionId: 'transaction-1',
@@ -94,7 +96,7 @@ describe('iapService', () => {
 
     const result = await iapService.purchaseSubscription(
       PRODUCT_IDS.MONTHLY,
-      '550e8400-e29b-41d4-a716-446655440000'
+      TEST_ACCOUNT_TOKEN
     );
 
     expect(result).toEqual({ success: true, purchase });
@@ -102,11 +104,11 @@ describe('iapService', () => {
       request: {
         apple: {
           sku: PRODUCT_IDS.MONTHLY,
-          appAccountToken: '550e8400-e29b-41d4-a716-446655440000',
+          appAccountToken: TEST_ACCOUNT_TOKEN,
         },
         google: {
           skus: [PRODUCT_IDS.MONTHLY],
-          obfuscatedAccountIdAndroid: '550e8400-e29b-41d4-a716-446655440000',
+          obfuscatedAccountIdAndroid: TEST_ACCOUNT_TOKEN,
         },
       },
       type: 'subs',
@@ -300,7 +302,7 @@ describe('iapService', () => {
 
   it('rejects a database grant whose plan does not match the purchased product', async () => {
     const result = await iapService.savePurchaseToDatabase(
-      '550e8400-e29b-41d4-a716-446655440000',
+      TEST_ACCOUNT_TOKEN,
       subscription(PRODUCT_IDS.MONTHLY),
       'yearly'
     );
@@ -320,7 +322,7 @@ describe('iapService', () => {
     });
 
     const result = await iapService.savePurchaseToDatabase(
-      '550e8400-e29b-41d4-a716-446655440000',
+      TEST_ACCOUNT_TOKEN,
       {
         productId: PRODUCT_IDS.MONTHLY,
         transactionId: null,
@@ -348,7 +350,7 @@ describe('iapService', () => {
     Platform.OS = 'android';
 
     const result = await iapService.savePurchaseToDatabase(
-      '550e8400-e29b-41d4-a716-446655440000',
+      TEST_ACCOUNT_TOKEN,
       {
         productId: PRODUCT_IDS.MONTHLY,
         transactionId: 'GPA.1234',
@@ -387,7 +389,7 @@ describe('iapService', () => {
     });
 
     const result = await iapService.savePurchaseToDatabase(
-      '550e8400-e29b-41d4-a716-446655440000',
+      TEST_ACCOUNT_TOKEN,
       subscription(PRODUCT_IDS.MONTHLY),
       'monthly'
     );
