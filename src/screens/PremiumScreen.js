@@ -80,7 +80,6 @@ export default function PremiumScreen({ onNavigate, onSubscriptionActivated, sub
       // Load premium status from database
       if (user) {
         const status = await getPremiumStatus(user.id);
-        const accessStatus = await getSubscriptionAccessStatus(user.id);
         setPremiumStatus(status);
       }
 
@@ -178,6 +177,7 @@ export default function PremiumScreen({ onNavigate, onSubscriptionActivated, sub
         
         // Refresh status
         const status = await getPremiumStatus(user.id);
+        const accessStatus = await getSubscriptionAccessStatus(user.id);
         setPremiumStatus(status);
 
         Alert.alert(
