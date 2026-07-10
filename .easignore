@@ -1,0 +1,36 @@
+.expo/
+node_modules/
+.DS_Store
+.claude/
+
+# Environment and signing secrets must never be uploaded with build sources.
+.env
+.env.*
+credentials.json
+credentials.json.*
+credentials/
+*.jks
+*.pem
+google-play-service-account.json
+
+# Local reports, exports, and unrelated working files.
+test-results/
+playwright-report/
+coverage/
+screenshots/
+seo-pages/
+dist/
+build/
+ios/build/
+ios/Pods/
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/.cxx/
+android/app/build/
+*.log
+*.aab
+*.ipa
+*.docx
+LinkedIn-Post-*.md
+linkedin-post-run-*.md

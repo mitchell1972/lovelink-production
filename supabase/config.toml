@@ -1,0 +1,11 @@
+project_id = "tfrhdxatjsyobmyffuzg"
+
+[functions.verify-google-play-subscription]
+verify_jwt = true
+
+[functions.verify-app-store-subscription]
+verify_jwt = true
+
+# Apple authenticates this public webhook with its signedPayload JWS.
+[functions.app-store-server-notifications]
+verify_jwt = false
