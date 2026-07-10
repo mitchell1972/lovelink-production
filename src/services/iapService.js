@@ -6,7 +6,7 @@ import * as RNIap from 'react-native-iap';
 import { supabase } from '../config/supabase';
 import { log, error } from '../utils/logger';
 
-// Product IDs - MUST match App Store Connect exactly
+// Product IDs - MUST match App Store Connect and Google Play exactly
 export const PRODUCT_IDS = {
   MONTHLY: 'com.lovelinkcouples.premium.monthly',
   YEARLY: 'com.lovelinkcouples.premium.yearly',
@@ -31,15 +31,6 @@ const validPlans = new Set(['monthly', 'yearly']);
 const isSupportedSubscriptionProductId = (productId) =>
   typeof productId === 'string' &&
   (subscriptionSkusList.includes(productId) || legacySubscriptionSkus.includes(productId));
-
-const isMissingPurchaseRequestConfigError = (error) => {
-  const code = error?.code;
-  const message = (error?.message || '').toLowerCase();
-  return (
-    code === 'E_MISSING_PURCHASE_REQUEST' ||
-    message.includes('missing purchase request configuration')
-  );
-};
 
 const isUserCancelledPurchaseError = (purchaseError) => {
   try {
@@ -111,15 +102,43 @@ const hasPurchaseProof = (purchase) => Boolean(
   purchase?.transactionReceipt
 );
 
+// Google Play subscriptions use purchaseToken as their canonical transaction
+// reference. transactionId is optional on Android in react-native-iap v14.
+const getStorePurchaseReference = (purchase) =>
+  purchase?.transactionId ||
+  purchase?.purchaseToken ||
+  purchase?.transactionReceipt ||
+  null;
+
 const isSevenDayFreeTrialPhase = (phase) =>
   phase?.billingPeriod === 'P7D' && Number(phase?.priceAmountMicros) === 0;
 
-const getAndroidTrialOffer = (product) => {
-  const offers = product?.subscriptionOfferDetailsAndroid || product?.subscriptionOfferDetails || [];
-  return offers.find((offer) =>
-    (offer?.pricingPhases?.pricingPhaseList || []).some(isSevenDayFreeTrialPhase)
-  ) || null;
+const getAndroidOfferPhases = (offer) => {
+  const phases = offer?.pricingPhases?.pricingPhaseList || offer?.pricingPhases || [];
+  return Array.isArray(phases) ? phases : [];
 };
+
+const getAndroidSubscriptionOffers = (product) => {
+  const modernOffers = Array.isArray(product?.subscriptionOfferDetailsAndroid)
+    ? product.subscriptionOfferDetailsAndroid
+    : [];
+  const legacyOffers = Array.isArray(product?.subscriptionOfferDetails)
+    ? product.subscriptionOfferDetails
+    : [];
+
+  // Some staged native builds expose an empty modern field alongside the
+  // populated legacy field. Merge both shapes and de-duplicate by token.
+  return [...modernOffers, ...legacyOffers].filter((offer, index, offers) =>
+    typeof offer?.offerToken === 'string' &&
+    offer.offerToken.length > 0 &&
+    offers.findIndex((candidate) => candidate?.offerToken === offer.offerToken) === index
+  );
+};
+
+const getAndroidTrialOffer = (product) =>
+  getAndroidSubscriptionOffers(product).find((offer) =>
+    getAndroidOfferPhases(offer).some(isSevenDayFreeTrialPhase)
+  ) || null;
 
 const hasIosSevenDayFreeTrial = (product) => {
   const offer = product?.subscriptionInfoIOS?.introductoryOffer;
@@ -337,6 +356,7 @@ class IAPService {
           },
           google: {
             skus: [productId],
+            ...(appAccountToken ? { obfuscatedAccountIdAndroid: appAccountToken } : {}),
             ...(offerToken ? { subscriptionOffers: [{ sku: productId, offerToken }] } : {}),
           },
         },
@@ -374,19 +394,12 @@ class IAPService {
           });
         }
 
+        // Never fall back to the legacy SKU-only request. On Google Play that
+        // request omits the required trial offer token and can select a paid
+        // base plan instead of the promised seven-day free trial.
         Promise.resolve(RNIap.requestPurchase(modernRequest))
           .then(handlePurchase)
-          .catch(async (modernError) => {
-            if (!isMissingPurchaseRequestConfigError(modernError)) {
-              settle(reject, modernError);
-              return;
-            }
-            try {
-              handlePurchase(await RNIap.requestPurchase({ sku: productId }));
-            } catch (legacyError) {
-              settle(reject, legacyError);
-            }
-          });
+          .catch((purchaseError) => settle(reject, purchaseError));
       });
 
       log('=== PURCHASE RESULT ===');
@@ -423,7 +436,7 @@ class IAPService {
 
       // Handle known error codes
       if (err.code === 'E_UNKNOWN' || err.code === 'E_SERVICE_ERROR') {
-        return { success: false, error: 'App Store service error. Please try again.' };
+        return { success: false, error: 'Store service error. Please try again.' };
       }
 
       if (err.code === 'E_MISSING_PURCHASE_REQUEST') {
@@ -522,13 +535,18 @@ class IAPService {
 
       const premiumSince = new Date().toISOString();
       const premiumExpires = calculatePremiumExpiry(plan).toISOString();
+      const purchaseReference = getStorePurchaseReference(purchase);
+
+      if (!purchaseReference) {
+        return { success: false, error: 'Missing purchase transaction reference' };
+      }
 
       const premiumFields = {
         is_premium: true,
         premium_plan: plan,
         premium_since: premiumSince,
         premium_expires: premiumExpires,
-        iap_transaction_id: purchase.transactionId,
+        iap_transaction_id: purchaseReference,
         iap_product_id: purchase.productId,
       };
 
@@ -537,7 +555,7 @@ class IAPService {
       const { data: rpcData, error: rpcError } = await supabase.rpc('grant_premium_from_iap', {
         p_user_id: userId,
         p_product_id: purchase.productId,
-        p_transaction_id: purchase.transactionId || null,
+        p_transaction_id: purchaseReference,
         p_plan: plan,
         p_premium_since: premiumSince,
         p_premium_expires: premiumExpires,
@@ -562,7 +580,7 @@ class IAPService {
 
       if (currentProfileError) throw currentProfileError;
 
-      if (purchase.transactionId && currentProfile.iap_transaction_id === purchase.transactionId) {
+      if (currentProfile.iap_transaction_id === purchaseReference) {
         return { success: true, data: currentProfile };
       }
 

@@ -100,6 +100,7 @@ describe('iapService', () => {
         },
         google: {
           skus: [PRODUCT_IDS.MONTHLY],
+          obfuscatedAccountIdAndroid: '550e8400-e29b-41d4-a716-446655440000',
         },
       },
       type: 'subs',
@@ -195,10 +196,82 @@ describe('iapService', () => {
     expect(mockRNIap.requestPurchase).toHaveBeenCalledWith(expect.objectContaining({
       request: expect.objectContaining({
         google: expect.objectContaining({
+          obfuscatedAccountIdAndroid: 'user-1',
           subscriptionOffers: [{ sku: PRODUCT_IDS.MONTHLY, offerToken: 'seven-day-trial' }],
         }),
       }),
     }));
+  });
+
+  it('uses a legacy Android offer response when the modern offer field is empty', async () => {
+    const purchase = subscription(PRODUCT_IDS.MONTHLY);
+    iapService.products = [{
+      productId: PRODUCT_IDS.MONTHLY,
+      platform: 'android',
+      subscriptionOfferDetailsAndroid: [],
+      subscriptionOfferDetails: [{
+        offerToken: 'legacy-seven-day-trial',
+        pricingPhases: [
+          { billingPeriod: 'P7D', priceAmountMicros: '0' },
+          { billingPeriod: 'P1M', priceAmountMicros: '3990000' },
+        ],
+      }],
+    }];
+    mockRNIap.requestPurchase.mockResolvedValue(purchase);
+
+    const result = await iapService.purchaseSubscription(PRODUCT_IDS.MONTHLY, 'user-1');
+
+    expect(result).toEqual({ success: true, purchase });
+    expect(mockRNIap.requestPurchase).toHaveBeenCalledWith(expect.objectContaining({
+      request: expect.objectContaining({
+        google: expect.objectContaining({
+          subscriptionOffers: [{
+            sku: PRODUCT_IDS.MONTHLY,
+            offerToken: 'legacy-seven-day-trial',
+          }],
+        }),
+      }),
+    }));
+  });
+
+  it('refuses an Android free-trial phase that has no offer token', async () => {
+    iapService.products = [{
+      productId: PRODUCT_IDS.MONTHLY,
+      platform: 'android',
+      subscriptionOfferDetailsAndroid: [{
+        pricingPhases: {
+          pricingPhaseList: [{ billingPeriod: 'P7D', priceAmountMicros: '0' }],
+        },
+      }],
+    }];
+
+    const result = await iapService.purchaseSubscription(PRODUCT_IDS.MONTHLY, 'user-1');
+
+    expect(result).toEqual(expect.objectContaining({ success: false }));
+    expect(result.error).toMatch(/7-day free trial/i);
+    expect(mockRNIap.requestPurchase).not.toHaveBeenCalled();
+  });
+
+  it('does not retry a failed modern request without the Google Play offer token', async () => {
+    iapService.products = [{
+      productId: PRODUCT_IDS.MONTHLY,
+      platform: 'android',
+      subscriptionOfferDetailsAndroid: [{
+        offerToken: 'seven-day-trial',
+        pricingPhases: {
+          pricingPhaseList: [{ billingPeriod: 'P7D', priceAmountMicros: '0' }],
+        },
+      }],
+    }];
+    mockRNIap.requestPurchase.mockRejectedValue({
+      code: 'E_MISSING_PURCHASE_REQUEST',
+      message: 'Missing purchase request configuration',
+    });
+
+    const result = await iapService.purchaseSubscription(PRODUCT_IDS.MONTHLY, 'user-1');
+
+    expect(result).toEqual(expect.objectContaining({ success: false }));
+    expect(mockRNIap.requestPurchase).toHaveBeenCalledTimes(1);
   });
 
   it('restores only active subscription entitlements', async () => {
@@ -230,5 +303,28 @@ describe('iapService', () => {
       success: false,
       error: 'Subscription plan does not match the purchased product',
     });
+  });
+
+  it('persists the Google Play purchase token when Android has no transaction id', async () => {
+    const { supabase } = require('../../config/supabase');
+    supabase.rpc.mockResolvedValue({ data: { success: true }, error: null });
+
+    const result = await iapService.savePurchaseToDatabase(
+      '550e8400-e29b-41d4-a716-446655440000',
+      {
+        productId: PRODUCT_IDS.MONTHLY,
+        transactionId: null,
+        purchaseToken: 'google-play-purchase-token',
+      },
+      'monthly'
+    );
+
+    expect(result).toEqual({ success: true, data: { success: true } });
+    expect(supabase.rpc).toHaveBeenCalledWith(
+      'grant_premium_from_iap',
+      expect.objectContaining({
+        p_transaction_id: 'google-play-purchase-token',
+      })
+    );
   });
 });

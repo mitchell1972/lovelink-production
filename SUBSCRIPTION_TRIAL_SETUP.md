@@ -15,10 +15,16 @@ Apple determines introductory-offer eligibility. A customer who has already used
 
 ## Google Play Console
 
-For each matching subscription/base plan:
+For package `com.mitchellagoma.lovelink.play2026`, configure both subscription
+products exactly as the app requests them:
+
+- `com.lovelinkcouples.premium.monthly`
+- `com.lovelinkcouples.premium.yearly`
+
+For each subscription/base plan:
 
 1. Create an offer with a first pricing phase of a **free trial** for exactly **7 days** (`P7D`) at zero price.
-2. Follow it with the normal recurring monthly or yearly price.
+2. Confirm the offer has a non-empty Play offer token, then follow it with the normal recurring monthly or yearly price.
 3. Activate the offer in every target country and add a license tester.
 
 The app selects only an eligible Play offer whose first pricing phase is a zero-price seven-day trial. It does not use the first returned offer blindly.

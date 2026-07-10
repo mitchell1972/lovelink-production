@@ -34,7 +34,7 @@ export default {
         backgroundColor: "#6C63FF",
       },
       package: "com.mitchellagoma.lovelink.play2026",
-      versionCode: 6,
+      versionCode: 7,
       permissions: [
         "android.permission.CAMERA",
         "android.permission.READ_EXTERNAL_STORAGE",
