@@ -20,6 +20,7 @@ CREATE TABLE public.profiles (
   premium_expires TIMESTAMPTZ,
   iap_transaction_id TEXT,
   iap_product_id TEXT,
+  iap_store TEXT CHECK (iap_store IS NULL OR iap_store IN ('app_store', 'google_play')),
   premium_granted_by UUID REFERENCES public.profiles(id),
   trial_access_bypass BOOLEAN DEFAULT FALSE,
   push_token TEXT,

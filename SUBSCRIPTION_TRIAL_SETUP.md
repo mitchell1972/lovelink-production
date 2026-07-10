@@ -34,4 +34,4 @@ The app selects only an eligible Play offer whose first pricing phase is a zero-
 1. Test a new iOS Sandbox account: its payment sheet must show a seven-day trial and no charge today.
 2. Test a new Play license tester: its payment sheet must show a zero-price seven-day phase before the paid renewal phase.
 3. Cancel during the trial in both stores and verify access ends after the trial.
-4. Test a renewal and a restore. Do not ship until server-side receipt validation is in place: the current Supabase RPC records client-supplied transaction data and cannot independently prove entitlement or renewal state.
+4. Test a renewal and a restore. Android purchase tokens are verified by the `verify-google-play-subscription` Supabase Edge Function, and Google-provided expiry/state is reconciled on app launch and foreground. The legacy RPC remains only for the currently released iOS build until Apple server verification is migrated.

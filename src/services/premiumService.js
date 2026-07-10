@@ -73,7 +73,9 @@ export const PREMIUM_FEATURES = [
  */
 const isPremiumValid = (profile) =>
   profile.is_premium &&
-  (!profile.premium_expires || new Date(profile.premium_expires) > new Date());
+  !profile.premium_granted_by &&
+  Boolean(profile.premium_expires) &&
+  new Date(profile.premium_expires) > new Date();
 
 /**
  * Resolve partner id from active partnerships when profile.partner_id is absent.
@@ -105,7 +107,7 @@ export const getPremiumStatus = async (userId) => {
   try {
     const { data, error } = await supabase
       .from('profiles')
-      .select('is_premium, premium_since, premium_expires, premium_plan, partner_id')
+      .select('is_premium, premium_since, premium_expires, premium_plan, premium_granted_by, partner_id')
       .eq('id', userId)
       .single();
 
@@ -128,7 +130,7 @@ export const getPremiumStatus = async (userId) => {
     if (partnerId) {
       const { data: partner, error: partnerError } = await supabase
         .from('profiles')
-        .select('is_premium, premium_since, premium_expires, premium_plan, name')
+        .select('is_premium, premium_since, premium_expires, premium_plan, premium_granted_by, name')
         .eq('id', partnerId)
         .single();
 

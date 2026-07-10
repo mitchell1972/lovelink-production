@@ -23,7 +23,7 @@ class IAPServiceWeb {
   removeListeners() {}
   async endConnection() {}
   getProductPrice(productId) {
-    return productId?.includes('yearly') ? '£39.99' : '£3.99';
+    return productId?.includes('yearly') ? '£39.99' : '£4.79';
   }
   getProduct() { return null; }
 }

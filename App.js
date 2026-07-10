@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, ScrollView, StyleSheet, StatusBar, Text, Alert, Vibration } from 'react-native';
+import { View, ScrollView, StyleSheet, StatusBar, Text, Alert, Vibration, AppState, Platform } from 'react-native';
 import { AuthProvider, useAuth } from './src/contexts/AuthContext';
 import {
   GradientBackground,
@@ -22,6 +22,7 @@ import {
 import { isSupabaseConfigured } from './src/config/supabase';
 import { getSubscriptionAccessStatus, SUBSCRIPTION_GATED_FEATURES } from './src/services/premiumService';
 import { inAppAlertsService } from './src/services/inAppAlertsService';
+import { iapService } from './src/services/iapService';
 
 // Screens that handle their own scrolling (have FlatList or ScrollView)
 const SELF_SCROLLING_SCREENS = ['moments', 'home', 'pulse', 'premium', 'settings', 'session', 'plan'];
@@ -85,6 +86,9 @@ const AppContent = () => {
       }
 
       setSubscriptionAccess(null);
+      if (Platform.OS === 'android') {
+        await iapService.syncSubscriptionEntitlement(user.id);
+      }
       const status = await getSubscriptionAccessStatus(user.id);
       if (!isActive) return;
 
@@ -96,6 +100,29 @@ const AppContent = () => {
     loadSubscriptionAccess();
     return () => { isActive = false; };
   }, [user?.id, isPaired]);
+
+  // Reconcile cancellations, trial expiry, and renewals whenever Android
+  // returns to the foreground instead of trusting a stale in-memory grant.
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !user?.id) return undefined;
+
+    let refreshing = false;
+    const subscription = AppState.addEventListener('change', async (nextState) => {
+      if (nextState !== 'active' || refreshing) return;
+
+      refreshing = true;
+      try {
+        await iapService.syncSubscriptionEntitlement(user.id);
+        const status = await getSubscriptionAccessStatus(user.id);
+        setSubscriptionAccess(status);
+        if (!status.hasAccess) setCurrentScreen('premium');
+      } finally {
+        refreshing = false;
+      }
+    });
+
+    return () => subscription.remove();
+  }, [user?.id]);
 
   // Expose navigation for automated testing (dev only)
   useEffect(() => {
@@ -113,8 +140,13 @@ const AppContent = () => {
       if (!user?.id || !isPaired) return;
       if (!SUBSCRIPTION_GATED_FEATURES.includes(currentScreen)) return;
 
+      if (Platform.OS === 'android') {
+        await iapService.syncSubscriptionEntitlement(user.id);
+      }
       const status = await getSubscriptionAccessStatus(user.id);
       if (!isActive) return;
+
+      setSubscriptionAccess(status);
 
       if (!status.hasAccess) {
         Alert.alert(

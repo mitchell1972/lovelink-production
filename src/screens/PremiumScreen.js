@@ -16,7 +16,8 @@ import {
 } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
 import { 
-  getPremiumStatus, 
+  getPremiumStatus,
+  getSubscriptionAccessStatus,
   PREMIUM_FEATURES,
   formatPremiumExpiry,
 } from '../services/premiumService';
@@ -79,6 +80,7 @@ export default function PremiumScreen({ onNavigate, onSubscriptionActivated, sub
       // Load premium status from database
       if (user) {
         const status = await getPremiumStatus(user.id);
+        const accessStatus = await getSubscriptionAccessStatus(user.id);
         setPremiumStatus(status);
       }
 
@@ -181,7 +183,7 @@ export default function PremiumScreen({ onNavigate, onSubscriptionActivated, sub
         Alert.alert(
           '🎉 Subscription active!',
           'LoveLink is now unlocked for both you and your partner. Your 7-day free trial has started and the store will charge only after it ends.',
-          [{ text: 'Continue', onPress: () => onSubscriptionActivated?.(status) }]
+          [{ text: 'Continue', onPress: () => onSubscriptionActivated?.(accessStatus) }]
         );
       } else if (result.cancelled) {
         // User cancelled - do nothing
@@ -219,12 +221,18 @@ export default function PremiumScreen({ onNavigate, onSubscriptionActivated, sub
             Alert.alert('Restore needs attention', saveResult.error || 'Premium could not be restored. Please try again later.');
             return;
           }
+
+          const finishResult = await finishPurchaseTransaction(subscription);
+          if (!finishResult.success) {
+            logError('Restored purchase was verified, but transaction completion failed:', finishResult.error);
+          }
           
           const status = await getPremiumStatus(user.id);
+          const accessStatus = await getSubscriptionAccessStatus(user.id);
           setPremiumStatus(status);
 
           Alert.alert('Restored!', 'Your subscription has been restored.', [
-            { text: 'Continue', onPress: () => onSubscriptionActivated?.(status) },
+            { text: 'Continue', onPress: () => onSubscriptionActivated?.(accessStatus) },
           ]);
         } else {
           Alert.alert('No Subscription Found', 'No active subscription found to restore.');

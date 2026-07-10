@@ -2,7 +2,7 @@ export default {
   expo: {
     name: "LoveLink",
     slug: "lovelink",
-    version: "1.0.8",
+    version: "1.0.9",
     orientation: "portrait",
     icon: "./assets/icon.png",
     userInterfaceStyle: "light",
@@ -34,7 +34,7 @@ export default {
         backgroundColor: "#6C63FF",
       },
       package: "com.mitchellagoma.lovelink.play2026",
-      versionCode: 7,
+      versionCode: 8,
       permissions: [
         "android.permission.CAMERA",
         "android.permission.READ_EXTERNAL_STORAGE",

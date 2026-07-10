@@ -14,6 +14,7 @@ const buildProfile = (overrides = {}) => ({
   premium_since: null,
   premium_expires: null,
   premium_plan: null,
+  premium_granted_by: null,
   partner_id: null,
   ...overrides,
 });
@@ -91,6 +92,37 @@ describe('premiumService', () => {
       hasAccess: true,
       isPremium: true,
       reason: 'subscription',
+    });
+  });
+
+  it('does not treat a premium flag without a verified expiry as permanent access', async () => {
+    setupSupabase({
+      userProfile: buildProfile({
+        is_premium: true,
+        premium_expires: null,
+        premium_plan: 'yearly',
+      }),
+    });
+
+    await expect(getSubscriptionAccessStatus('user-1')).resolves.toMatchObject({
+      hasAccess: false,
+      reason: 'subscription_required',
+    });
+  });
+
+  it('does not treat a copied partner grant as the user’s own subscription', async () => {
+    setupSupabase({
+      userProfile: buildProfile({
+        is_premium: true,
+        premium_expires: '2099-01-01T00:00:00.000Z',
+        premium_plan: 'yearly',
+        premium_granted_by: 'former-partner',
+      }),
+    });
+
+    await expect(getSubscriptionAccessStatus('user-1')).resolves.toMatchObject({
+      hasAccess: false,
+      reason: 'subscription_required',
     });
   });
 

@@ -22,8 +22,13 @@ jest.mock('react-native-iap', () => mockRNIap);
 jest.mock('../../config/supabase', () => ({
   supabase: {
     rpc: jest.fn(),
+    functions: {
+      invoke: jest.fn(),
+    },
   },
 }));
+
+const { Platform } = require('react-native');
 
 const {
   iapService,
@@ -39,6 +44,7 @@ const subscription = (productId) => ({
 describe('iapService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    Platform.OS = 'ios';
     iapService.products = [];
     iapService.isInitialized = false;
     mockRNIap.initConnection.mockResolvedValue(true);
@@ -305,9 +311,13 @@ describe('iapService', () => {
     });
   });
 
-  it('persists the Google Play purchase token when Android has no transaction id', async () => {
+  it('sends Android purchase tokens to the server verifier instead of the legacy grant RPC', async () => {
     const { supabase } = require('../../config/supabase');
-    supabase.rpc.mockResolvedValue({ data: { success: true }, error: null });
+    Platform.OS = 'android';
+    supabase.functions.invoke.mockResolvedValue({
+      data: { success: true, active: true, expiresAt: '2099-01-01T00:00:00Z' },
+      error: null,
+    });
 
     const result = await iapService.savePurchaseToDatabase(
       '550e8400-e29b-41d4-a716-446655440000',
@@ -319,12 +329,71 @@ describe('iapService', () => {
       'monthly'
     );
 
+    expect(result).toEqual(expect.objectContaining({ success: true }));
+    expect(supabase.functions.invoke).toHaveBeenCalledWith(
+      'verify-google-play-subscription',
+      {
+        body: {
+          action: 'verify',
+          productId: PRODUCT_IDS.MONTHLY,
+          purchaseToken: 'google-play-purchase-token',
+        },
+      }
+    );
+    expect(supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  it('does not grant Android premium without a Google Play purchase token', async () => {
+    const { supabase } = require('../../config/supabase');
+    Platform.OS = 'android';
+
+    const result = await iapService.savePurchaseToDatabase(
+      '550e8400-e29b-41d4-a716-446655440000',
+      {
+        productId: PRODUCT_IDS.MONTHLY,
+        transactionId: 'GPA.1234',
+      },
+      'monthly'
+    );
+
+    expect(result).toEqual({ success: false, error: 'Missing Google Play purchase token' });
+    expect(supabase.functions.invoke).not.toHaveBeenCalled();
+    expect(supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  it('asks the backend to refresh entitlement when Play returns no local subscription', async () => {
+    const { supabase } = require('../../config/supabase');
+    Platform.OS = 'android';
+    mockRNIap.getActiveSubscriptions.mockResolvedValue([]);
+    supabase.functions.invoke.mockResolvedValue({
+      data: { success: true, active: false, reason: 'no_entitlement' },
+      error: null,
+    });
+
+    const result = await iapService.syncSubscriptionEntitlement('user-1');
+
+    expect(result).toEqual(expect.objectContaining({ success: true }));
+    expect(supabase.functions.invoke).toHaveBeenCalledWith(
+      'verify-google-play-subscription',
+      { body: { action: 'refresh' } }
+    );
+  });
+
+  it('keeps the legacy grant RPC limited to the currently released iOS path', async () => {
+    const { supabase } = require('../../config/supabase');
+    supabase.rpc.mockResolvedValue({ data: { success: true }, error: null });
+
+    const result = await iapService.savePurchaseToDatabase(
+      '550e8400-e29b-41d4-a716-446655440000',
+      subscription(PRODUCT_IDS.MONTHLY),
+      'monthly'
+    );
+
     expect(result).toEqual({ success: true, data: { success: true } });
     expect(supabase.rpc).toHaveBeenCalledWith(
       'grant_premium_from_iap',
-      expect.objectContaining({
-        p_transaction_id: 'google-play-purchase-token',
-      })
+      expect.objectContaining({ p_transaction_id: 'transaction-1' })
     );
+    expect(supabase.functions.invoke).not.toHaveBeenCalled();
   });
 });

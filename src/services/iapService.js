@@ -25,8 +25,8 @@ const legacySubscriptionSkus = [
   'com.lovelink.premium.yearly',
   'lovelink.premium.monthly',
 ];
-const rpcMissingFunctionCodes = new Set(['PGRST202', '42883']);
 const validPlans = new Set(['monthly', 'yearly']);
+const GOOGLE_PLAY_VERIFY_FUNCTION = 'verify-google-play-subscription';
 
 const isSupportedSubscriptionProductId = (productId) =>
   typeof productId === 'string' &&
@@ -194,24 +194,6 @@ const calculatePremiumExpiry = (plan) => {
     return new Date(now.setFullYear(now.getFullYear() + 1));
   }
   return new Date(now.setMonth(now.getMonth() + 1));
-};
-
-const getPartnerIdFromActivePartnership = async (userId) => {
-  const { data: partnerships, error } = await supabase
-    .from('partnerships')
-    .select('user1_id, user2_id')
-    .or(`user1_id.eq.${userId},user2_id.eq.${userId}`)
-    .eq('status', 'active')
-    .order('created_at', { ascending: false })
-    .limit(1);
-
-  if (error) throw error;
-
-  const rows = Array.isArray(partnerships) ? partnerships : (partnerships ? [partnerships] : []);
-  const latest = rows[0];
-  if (!latest) return null;
-
-  return latest.user1_id === userId ? latest.user2_id : latest.user1_id;
 };
 
 class IAPService {
@@ -470,6 +452,47 @@ class IAPService {
   }
 
   /**
+   * Reconcile Google Play with the server before trusting the cached profile.
+   * The Edge Function validates the purchase token with Google and writes the
+   * store-provided expiry. A refresh without a local purchase lets the server
+   * revoke an expired or canceled entitlement it already knows about.
+   */
+  async syncSubscriptionEntitlement(userId) {
+    if (Platform.OS !== 'android' || !userId) {
+      return { success: true, skipped: true };
+    }
+
+    try {
+      const purchases = await this.restorePurchases();
+      const purchase = purchases
+        .filter((candidate) => isSupportedSubscriptionProductId(candidate?.productId))
+        .sort((a, b) => (b.transactionDate || 0) - (a.transactionDate || 0))[0];
+
+      if (purchase?.purchaseToken) {
+        const plan = getPlanForProductId(purchase.productId);
+        return await this.savePurchaseToDatabase(userId, purchase, plan);
+      }
+
+      const { data, error: invokeError } = await supabase.functions.invoke(
+        GOOGLE_PLAY_VERIFY_FUNCTION,
+        { body: { action: 'refresh' } }
+      );
+
+      if (invokeError) throw invokeError;
+      if (data?.success === false) {
+        return { success: false, error: data.error || 'Unable to refresh subscription' };
+      }
+
+      return { success: true, data };
+    } catch (err) {
+      // A store/network outage must not manufacture access or erase an
+      // entitlement. The normal database expiry check remains fail-closed.
+      error('Subscription reconciliation error:', err);
+      return { success: false, error: err.message || 'Unable to refresh subscription' };
+    }
+  }
+
+  /**
    * Check if user has active subscription
    */
   async checkActiveSubscription() {
@@ -508,8 +531,7 @@ class IAPService {
   }
 
   /**
-   * Save purchase to Supabase for server-side tracking.
-   * Also syncs premium to the linked partner so both get instant access.
+   * Verify a purchase on the server and persist its entitlement.
    */
   async savePurchaseToDatabase(userId, purchase, plan) {
     try {
@@ -533,25 +555,44 @@ class IAPService {
         return { success: false, error: 'Subscription plan does not match the purchased product' };
       }
 
-      const premiumSince = new Date().toISOString();
-      const premiumExpires = calculatePremiumExpiry(plan).toISOString();
       const purchaseReference = getStorePurchaseReference(purchase);
 
       if (!purchaseReference) {
         return { success: false, error: 'Missing purchase transaction reference' };
       }
 
-      const premiumFields = {
-        is_premium: true,
-        premium_plan: plan,
-        premium_since: premiumSince,
-        premium_expires: premiumExpires,
-        iap_transaction_id: purchaseReference,
-        iap_product_id: purchase.productId,
-      };
+      if (Platform.OS === 'android') {
+        if (!purchase.purchaseToken) {
+          return { success: false, error: 'Missing Google Play purchase token' };
+        }
 
-      // Preferred path: write premium via a server-side RPC.
-      // If the RPC is not deployed yet, fall back to the legacy client update path.
+        const { data, error: invokeError } = await supabase.functions.invoke(
+          GOOGLE_PLAY_VERIFY_FUNCTION,
+          {
+            body: {
+              action: 'verify',
+              productId: purchase.productId,
+              purchaseToken: purchase.purchaseToken,
+            },
+          }
+        );
+
+        if (invokeError) throw invokeError;
+        if (!data?.success) {
+          return {
+            success: false,
+            error: data?.error || 'Google Play could not verify this subscription',
+          };
+        }
+
+        return { success: true, data };
+      }
+
+      // Temporary iOS compatibility path. Android never reaches this RPC:
+      // Google Play purchases are always verified by the server above.
+      const premiumSince = new Date().toISOString();
+      const premiumExpires = calculatePremiumExpiry(plan).toISOString();
+
       const { data: rpcData, error: rpcError } = await supabase.rpc('grant_premium_from_iap', {
         p_user_id: userId,
         p_product_id: purchase.productId,
@@ -567,50 +608,7 @@ class IAPService {
         }
         return { success: true, data: rpcData };
       }
-
-      if (!rpcMissingFunctionCodes.has(rpcError.code)) {
-        throw rpcError;
-      }
-
-      const { data: currentProfile, error: currentProfileError } = await supabase
-        .from('profiles')
-        .select('id, partner_id, iap_transaction_id')
-        .eq('id', userId)
-        .single();
-
-      if (currentProfileError) throw currentProfileError;
-
-      if (currentProfile.iap_transaction_id === purchaseReference) {
-        return { success: true, data: currentProfile };
-      }
-
-      const partnerId = currentProfile.partner_id || await getPartnerIdFromActivePartnership(userId);
-
-      // Update subscriber's premium status
-      const { data, error } = await supabase
-        .from('profiles')
-        .update(premiumFields)
-        .eq('id', userId)
-        .select('id, partner_id, premium_plan, premium_since, premium_expires, iap_transaction_id, iap_product_id')
-        .single();
-
-      if (error) throw error;
-
-      // Sync premium to partner (convenience — getPremiumStatus handles correctness)
-      if (partnerId) {
-        await supabase
-          .from('profiles')
-          .update({
-            is_premium: true,
-            premium_plan: plan,
-            premium_since: premiumFields.premium_since,
-            premium_expires: premiumFields.premium_expires,
-            premium_granted_by: userId,
-          })
-          .eq('id', partnerId);
-      }
-
-      return { success: true, data };
+      throw rpcError;
     } catch (err) {
       error('Error saving purchase:', err);
       return { success: false, error: err.message };
@@ -696,7 +694,7 @@ class IAPService {
       return product.localizedPrice || product.price;
     }
     // Fallback prices
-    return productId.includes('yearly') ? '£39.99' : '£3.99';
+    return productId.includes('yearly') ? '£39.99' : '£4.79';
   }
 
   /**

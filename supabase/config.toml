@@ -1,0 +1,4 @@
+project_id = "tfrhdxatjsyobmyffuzg"
+
+[functions.verify-google-play-subscription]
+verify_jwt = true
