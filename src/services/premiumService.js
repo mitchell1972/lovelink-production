@@ -5,7 +5,9 @@ import { supabase } from '../config/supabase';
 import { error } from '../utils/logger';
 
 export const TRIAL_DAYS = 7;
-export const TRIAL_GATED_FEATURES = ['session', 'moments', 'pulse', 'plan'];
+export const SUBSCRIPTION_GATED_FEATURES = ['session', 'moments', 'pulse', 'plan'];
+// Backward-compatible name for older callers.
+export const TRIAL_GATED_FEATURES = SUBSCRIPTION_GATED_FEATURES;
 export const TRIAL_BYPASS_COLUMN = 'trial_access_bypass';
 
 // Feature limits for free vs premium users
@@ -65,9 +67,6 @@ export const PREMIUM_FEATURES = [
     premiumValue: '5+ patterns',
   },
 ];
-
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-const MISSING_COLUMN_ERROR_CODES = new Set(['42703', 'PGRST204']);
 
 /**
  * Check if premium fields represent a valid (non-expired) subscription
@@ -153,12 +152,15 @@ export const getPremiumStatus = async (userId) => {
 };
 
 /**
- * Determine whether the user can access trial-gated core features.
- * Access is granted when:
- * - user has active premium (self or partner), or
- * - user account age is within 7-day trial window.
+ * Determine whether the user can access the core app.
+ *
+ * A free trial is an introductory period of an auto-renewing store
+ * subscription—not an account-age entitlement. A user must first start a
+ * subscription in the App Store or Google Play. During its store-provided
+ * seven-day trial the subscription is active, so it grants access before a
+ * charge is made.
  */
-export const getTrialAccessStatus = async (userId) => {
+export const getSubscriptionAccessStatus = async (userId) => {
   try {
     const premiumStatus = await getPremiumStatus(userId);
 
@@ -169,63 +171,20 @@ export const getTrialAccessStatus = async (userId) => {
         isInTrial: false,
         daysRemaining: null,
         trialEndsAt: null,
-        reason: 'premium',
+        reason: 'subscription',
       };
     }
-
-    let profileRow = null;
-    let profileError = null;
-
-    // Preferred path: include explicit trial bypass flag.
-    const { data, error } = await supabase
-      .from('profiles')
-      .select(`created_at, ${TRIAL_BYPASS_COLUMN}`)
-      .eq('id', userId)
-      .single();
-
-    profileRow = data;
-    profileError = error;
-
-    // Backward compatibility for environments without the bypass column yet.
-    if (MISSING_COLUMN_ERROR_CODES.has(profileError?.code)) {
-      const fallbackResult = await supabase
-        .from('profiles')
-        .select('created_at')
-        .eq('id', userId)
-        .single();
-      profileRow = fallbackResult.data;
-      profileError = fallbackResult.error;
-    }
-
-    if (profileError) throw profileError;
-
-    if (profileRow?.[TRIAL_BYPASS_COLUMN]) {
-      return {
-        hasAccess: true,
-        isPremium: false,
-        isInTrial: false,
-        daysRemaining: null,
-        trialEndsAt: null,
-        reason: 'bypass',
-      };
-    }
-
-    const createdAt = profileRow?.created_at ? new Date(profileRow.created_at) : new Date();
-    const trialEndsAt = new Date(createdAt.getTime() + (TRIAL_DAYS * ONE_DAY_MS));
-    const now = new Date();
-    const msRemaining = trialEndsAt.getTime() - now.getTime();
-    const isInTrial = msRemaining > 0;
 
     return {
-      hasAccess: isInTrial,
+      hasAccess: false,
       isPremium: false,
-      isInTrial,
-      daysRemaining: isInTrial ? Math.max(1, Math.floor(msRemaining / ONE_DAY_MS)) : 0,
-      trialEndsAt: trialEndsAt.toISOString(),
-      reason: isInTrial ? 'trial' : 'expired',
+      isInTrial: false,
+      daysRemaining: 0,
+      trialEndsAt: null,
+      reason: 'subscription_required',
     };
   } catch (err) {
-    error('Error getting trial access status:', err);
+    error('Error getting subscription access status:', err);
     return {
       hasAccess: false,
       isPremium: false,
@@ -236,6 +195,9 @@ export const getTrialAccessStatus = async (userId) => {
     };
   }
 };
+
+// Backward-compatible export while callers migrate to the clearer name.
+export const getTrialAccessStatus = getSubscriptionAccessStatus;
 
 /**
  * Get feature limits based on premium status
@@ -329,6 +291,7 @@ export const formatPremiumExpiry = (expiresDate) => {
 
 export default {
   getPremiumStatus,
+  getSubscriptionAccessStatus,
   getTrialAccessStatus,
   getFeatureLimits,
   checkFeatureAccess,
@@ -336,6 +299,7 @@ export default {
   getAvailablePulsePatterns,
   formatPremiumExpiry,
   TRIAL_DAYS,
+  SUBSCRIPTION_GATED_FEATURES,
   TRIAL_GATED_FEATURES,
   TRIAL_BYPASS_COLUMN,
   FEATURE_LIMITS,

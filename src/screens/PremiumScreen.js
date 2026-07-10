@@ -27,7 +27,10 @@ import {
   getProducts,
   purchaseSubscription,
   restorePurchases,
+  finishPurchaseTransaction,
   savePurchaseToDatabase,
+  hasSevenDayFreeTrial,
+  isEligibleForSevenDayFreeTrial,
 } from '../services/iapService';
 
 // Helper: normalize iOS product shapes
@@ -50,12 +53,13 @@ const isKnownSubscriptionProduct = (productId) =>
   productId === PRODUCT_IDS.YEARLY ||
   LEGACY_PRODUCT_IDS.includes(productId);
 
-export default function PremiumScreen({ onNavigate }) {
-  const { user } = useAuth();
+export default function PremiumScreen({ onNavigate, onSubscriptionActivated, subscriptionRequired = false }) {
+  const { user, signOut } = useAuth();
   const [loading, setLoading] = useState(true);
   const [premiumStatus, setPremiumStatus] = useState(null);
   const [purchasing, setPurchasing] = useState(false);
   const [products, setProducts] = useState([]);
+  const [eligibleTrialProductIds, setEligibleTrialProductIds] = useState([]);
   const [iapUnavailableReason, setIapUnavailableReason] = useState(null);
   const [selectedPlan, setSelectedPlan] = useState('monthly');
   const [restoring, setRestoring] = useState(false);
@@ -79,31 +83,50 @@ export default function PremiumScreen({ onNavigate }) {
       }
 
       // Initialize IAP and fetch products
-      await initializeIAP();
+      const initialized = await initializeIAP();
+      if (!initialized) {
+        throw new Error('Could not connect to the app store');
+      }
       const availableProductsRaw = await getProducts();
       const availableProducts = normalizeProducts(availableProductsRaw);
       setProducts(availableProducts);
 
-      // If no products are returned, still allow the user to attempt a purchase.
-      // Apple may return 0 products while subscriptions are "Waiting for Review".
+      const trialEligibility = await Promise.all(
+        availableProducts.map(async (product) => ({
+          productId: product?.productId,
+          eligible: await isEligibleForSevenDayFreeTrial(product),
+        }))
+      );
+      const eligibleProductIds = trialEligibility
+        .filter(({ productId, eligible }) => productId && eligible)
+        .map(({ productId }) => productId);
+      setEligibleTrialProductIds(eligibleProductIds);
+
+      // Do not send a purchase request until the store returns the exact product.
+      // Falling back to another product can charge a customer for the wrong plan.
       if (!availableProducts || availableProducts.length === 0) {
-        const msg = Platform.OS === 'ios'
-          ? 'Store did not return subscription products yet. You can still try subscribing; if Apple blocks it, you will see the real StoreKit error. (Common causes: subscriptions still "Waiting for Review", Paid Apps agreement not active, or testing without a Sandbox tester.)'
-          : 'Store did not return subscription products yet. Please try again later.';
+        const msg = 'The app store has not returned any subscription products yet. Please try again later.';
         setIapUnavailableReason(msg);
       } else {
         setIapUnavailableReason(null);
-        // Ensure selected plan matches an available product (avoid "Product not found" after selecting)
-        const hasMonthly = availableProducts.some(p => p.productId === PRODUCT_IDS.MONTHLY);
-        const hasYearly = availableProducts.some(p => p.productId === PRODUCT_IDS.YEARLY);
-        if (selectedPlan === 'monthly' && !hasMonthly && hasYearly) setSelectedPlan('yearly');
-        if (selectedPlan === 'yearly' && !hasYearly && hasMonthly) setSelectedPlan('monthly');
+        // Only show plans whose returned store offer really starts with the
+        // required seven-day free trial and whose store account is eligible.
+        const hasMonthlyTrial = eligibleProductIds.includes(PRODUCT_IDS.MONTHLY);
+        const hasYearlyTrial = eligibleProductIds.includes(PRODUCT_IDS.YEARLY);
+        if (!hasMonthlyTrial && !hasYearlyTrial) {
+          setIapUnavailableReason('This store account is not currently eligible for a 7-day free trial, so LoveLink will not begin a purchase that could charge today.');
+        } else if (selectedPlan === 'monthly' && !hasMonthlyTrial && hasYearlyTrial) {
+          setSelectedPlan('yearly');
+        } else if (selectedPlan === 'yearly' && !hasYearlyTrial && hasMonthlyTrial) {
+          setSelectedPlan('monthly');
+        }
       }
       
       log('Products loaded:', availableProducts);
     } catch (err) {
       logError('Error initializing premium screen:', err);
       setPremiumStatus({ isPremium: false, plan: null, since: null, expires: null });
+      setEligibleTrialProductIds([]);
 
       const msg = Platform.OS === 'ios'
         ? 'Subscriptions are temporarily unavailable (store connection error). Please try again later.'
@@ -115,32 +138,50 @@ export default function PremiumScreen({ onNavigate }) {
 
   const handleSubscribe = async () => {
     if (purchasing) return;
+    if (!user?.id) {
+      Alert.alert('Sign in required', 'Please sign in before subscribing.');
+      return;
+    }
 
-    // Prefer the product returned by Apple, but fall back to our known SKU.
-    // This keeps the button working when Apple returns 0 products.
+    // Only charge the product matching the plan the customer chose.
     const chosen = iapService.getProductForPlan(selectedPlan);
-    const productId = chosen?.productId || (selectedPlan === 'yearly' ? PRODUCT_IDS.YEARLY : PRODUCT_IDS.MONTHLY);
+    if (!chosen?.productId) {
+      Alert.alert('Plan unavailable', 'This subscription plan is not currently available from the app store.');
+      return;
+    }
+    const productId = chosen.productId;
 
     setPurchasing(true);
 
     try {
       // This triggers the Apple payment sheet
-      const result = await purchaseSubscription(productId);
+      const result = await purchaseSubscription(productId, user.id);
 
       if (result.success) {
-        // Save to database
-        // Persist the plan that corresponds to the purchased product
+        // Grant the entitlement before finishing the StoreKit/Play transaction.
         const planType = getPlanTypeForProductId(productId);
-        await savePurchaseToDatabase(user.id, result.purchase, planType);
+        const saveResult = await savePurchaseToDatabase(user.id, result.purchase, planType);
+        if (!saveResult.success) {
+          Alert.alert(
+            'Purchase needs attention',
+            'Your purchase was received but Premium could not be activated. Please use Restore Purchases, or contact support if this continues.'
+          );
+          return;
+        }
+
+        const finishResult = await finishPurchaseTransaction(result.purchase);
+        if (!finishResult.success) {
+          logError('Purchase was activated, but transaction completion failed:', finishResult.error);
+        }
         
         // Refresh status
         const status = await getPremiumStatus(user.id);
         setPremiumStatus(status);
 
         Alert.alert(
-          '🎉 Welcome to Premium!',
-          'Thank you for subscribing! All premium features are now unlocked for both you and your partner.',
-          [{ text: 'Awesome!' }]
+          '🎉 Subscription active!',
+          'LoveLink is now unlocked for both you and your partner. Your 7-day free trial has started and the store will charge only after it ends.',
+          [{ text: 'Continue', onPress: () => onSubscriptionActivated?.(status) }]
         );
       } else if (result.cancelled) {
         // User cancelled - do nothing
@@ -157,29 +198,34 @@ export default function PremiumScreen({ onNavigate }) {
   };
 
   const handleRestorePurchases = async () => {
-    // Safety: restoring can also fail when store products are not available.
-    if (iapUnavailableReason) {
-      Alert.alert('Restore Unavailable', iapUnavailableReason);
-      return;
-    }
-
     setRestoring(true);
 
     try {
       const purchases = await restorePurchases();
 
       if (purchases && purchases.length > 0) {
-        // Find the most recent subscription
-        const subscription = purchases.find(p => isKnownSubscriptionProduct(p.productId));
+        // Use the latest active subscription returned by the store.
+        const subscription = purchases
+          .filter(p => isKnownSubscriptionProduct(p.productId))
+          .sort((a, b) =>
+            (b.expirationDateIOS || b.transactionDate || 0) -
+            (a.expirationDateIOS || a.transactionDate || 0)
+          )[0];
 
         if (subscription) {
-          const plan = subscription.productId === PRODUCT_IDS.YEARLY ? 'yearly' : 'monthly';
-          await savePurchaseToDatabase(user.id, subscription, plan);
+          const plan = getPlanTypeForProductId(subscription.productId);
+          const saveResult = await savePurchaseToDatabase(user.id, subscription, plan);
+          if (!saveResult.success) {
+            Alert.alert('Restore needs attention', saveResult.error || 'Premium could not be restored. Please try again later.');
+            return;
+          }
           
           const status = await getPremiumStatus(user.id);
           setPremiumStatus(status);
 
-          Alert.alert('Restored!', 'Your Premium subscription has been restored.');
+          Alert.alert('Restored!', 'Your subscription has been restored.', [
+            { text: 'Continue', onPress: () => onSubscriptionActivated?.(status) },
+          ]);
         } else {
           Alert.alert('No Subscription Found', 'No active subscription found to restore.');
         }
@@ -207,15 +253,17 @@ export default function PremiumScreen({ onNavigate }) {
     onNavigate('home');
   };
 
+  const handleLogout = async () => {
+    await signOut();
+  };
+
   const getDisplayPrice = (type) => {
     const preferred = type === 'yearly' ? PRODUCT_IDS.YEARLY : PRODUCT_IDS.MONTHLY;
-    const fallback = type === 'yearly' ? PRODUCT_IDS.MONTHLY : PRODUCT_IDS.YEARLY;
-    const product = products.find(p => p.productId === preferred) || products.find(p => p.productId === fallback);
+    const product = products.find(p => p.productId === preferred);
     if (product) {
-      return product.localizedPrice || product.price || product.priceString;
+      return product.localizedPrice || product.displayPrice || product.priceString || product.price;
     }
-    // Fallback prices
-    return type === 'yearly' ? '£39.99/year' : '£3.99/month';
+    return 'Unavailable';
   };
 
   const renderFeatureCard = (feature) => {
@@ -261,6 +309,17 @@ export default function PremiumScreen({ onNavigate }) {
 
   const isPremium = premiumStatus?.isPremium;
   const canPurchase = !isPremium;
+  const monthlyAvailable = products.some((product) => product?.productId === PRODUCT_IDS.MONTHLY);
+  const yearlyAvailable = products.some((product) => product?.productId === PRODUCT_IDS.YEARLY);
+  const monthlyProduct = products.find((product) => product?.productId === PRODUCT_IDS.MONTHLY);
+  const yearlyProduct = products.find((product) => product?.productId === PRODUCT_IDS.YEARLY);
+  const monthlyTrialAvailable = monthlyAvailable &&
+    hasSevenDayFreeTrial(monthlyProduct) &&
+    eligibleTrialProductIds.includes(PRODUCT_IDS.MONTHLY);
+  const yearlyTrialAvailable = yearlyAvailable &&
+    hasSevenDayFreeTrial(yearlyProduct) &&
+    eligibleTrialProductIds.includes(PRODUCT_IDS.YEARLY);
+  const selectedPlanAvailable = selectedPlan === 'yearly' ? yearlyTrialAvailable : monthlyTrialAvailable;
 
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
@@ -295,9 +354,9 @@ export default function PremiumScreen({ onNavigate }) {
       ) : (
         <View style={styles.freeBanner}>
           <Text style={styles.freeBannerIcon}>🆓</Text>
-          <Text style={styles.freeBannerTitle}>Free Plan</Text>
+          <Text style={styles.freeBannerTitle}>Start with 7 days free</Text>
           <Text style={styles.freeBannerSubtitle}>
-            Upgrade to unlock all features
+            Start a subscription to unlock LoveLink — no charge today
           </Text>
         </View>
       )}
@@ -310,20 +369,23 @@ export default function PremiumScreen({ onNavigate }) {
       {/* Subscription Options */}
       {canPurchase && (
         <View style={styles.subscriptionOptions}>
-          <Text style={styles.subscriptionTitle}>Choose Your Plan</Text>
+          <Text style={styles.subscriptionTitle}>Choose your plan</Text>
           <Text style={styles.sharedPlanNote}>One subscription covers both you and your partner</Text>
           
           {/* Monthly Option */}
           <TouchableOpacity
             style={[
               styles.planOption,
-              selectedPlan === 'monthly' && styles.planOptionSelected
+              selectedPlan === 'monthly' && styles.planOptionSelected,
+              !monthlyTrialAvailable && styles.buttonDisabled,
             ]}
             onPress={() => setSelectedPlan('monthly')}
+            disabled={!monthlyTrialAvailable}
           >
             <View style={styles.planInfo}>
               <Text style={styles.planName}>Monthly</Text>
               <Text style={styles.planPrice}>{getDisplayPrice('monthly')}</Text>
+              <Text style={styles.planSavings}>7 days free, then renews monthly</Text>
             </View>
             <View style={[
               styles.planRadio,
@@ -337,14 +399,16 @@ export default function PremiumScreen({ onNavigate }) {
           <TouchableOpacity
             style={[
               styles.planOption,
-              selectedPlan === 'yearly' && styles.planOptionSelected
+              selectedPlan === 'yearly' && styles.planOptionSelected,
+              !yearlyTrialAvailable && styles.buttonDisabled,
             ]}
             onPress={() => setSelectedPlan('yearly')}
+            disabled={!yearlyTrialAvailable}
           >
             <View style={styles.planInfo}>
               <Text style={styles.planName}>Yearly</Text>
               <Text style={styles.planPrice}>{getDisplayPrice('yearly')}</Text>
-              <Text style={styles.planSavings}>Save 33%</Text>
+              <Text style={styles.planSavings}>7 days free, then renews yearly • Save 33%</Text>
             </View>
             <View style={[
               styles.planRadio,
@@ -356,7 +420,7 @@ export default function PremiumScreen({ onNavigate }) {
         </View>
       )}
 
-      {/* If store didn't return products, show info but keep purchase button enabled */}
+      {/* Explain why subscriptions cannot be selected when the store is unavailable. */}
       {!isPremium && !!iapUnavailableReason && (
         <View style={styles.iapUnavailableCard}>
           <Text style={styles.iapUnavailableTitle}>Subscription Setup Pending</Text>
@@ -377,10 +441,10 @@ export default function PremiumScreen({ onNavigate }) {
           <TouchableOpacity
             style={[
               styles.subscribeButton,
-              (purchasing || restoring) && styles.buttonDisabled,
+              (purchasing || restoring || !selectedPlanAvailable) && styles.buttonDisabled,
             ]}
             onPress={handleSubscribe}
-            disabled={purchasing || restoring}
+            disabled={purchasing || restoring || !selectedPlanAvailable}
           >
             {purchasing ? (
               <ActivityIndicator color="#fff" />
@@ -388,7 +452,7 @@ export default function PremiumScreen({ onNavigate }) {
               <>
                 <Text style={styles.subscribeButtonIcon}>💎</Text>
                 <Text style={styles.subscribeButtonText}>
-                  Subscribe Now
+                  Start 7-Day Free Trial
                 </Text>
               </>
             )}
@@ -416,7 +480,7 @@ export default function PremiumScreen({ onNavigate }) {
         <Text style={styles.legalText}>
           {isPremium 
             ? 'Thank you for supporting LoveLink!'
-            : `Payment will be charged to your ${Platform.OS === 'ios' ? 'Apple ID' : 'Google Play'} account at confirmation of purchase. Subscription automatically renews unless auto-renew is turned off at least 24-hours before the end of the current period.`
+            : `Start your 7-day free trial today. If eligible, your ${Platform.OS === 'ios' ? 'Apple ID' : 'Google Play'} account will be charged only after the trial ends unless you cancel at least 24 hours beforehand. Subscription automatically renews until cancelled. Price and trial eligibility are confirmed by the store before you subscribe.`
           }
         </Text>
         <View style={styles.legalLinks}>
@@ -430,9 +494,14 @@ export default function PremiumScreen({ onNavigate }) {
         </View>
       </View>
 
-      {/* Back Button */}
-      <TouchableOpacity style={styles.backButton} onPress={handleBack}>
-        <Text style={styles.backButtonText}>← Back</Text>
+      {/* Required paywalls cannot be bypassed, but users can still change accounts. */}
+      <TouchableOpacity
+        style={styles.backButton}
+        onPress={subscriptionRequired ? handleLogout : handleBack}
+      >
+        <Text style={styles.backButtonText}>
+          {subscriptionRequired ? 'Log Out' : '← Back'}
+        </Text>
       </TouchableOpacity>
       
       <View style={{ height: 40 }} />
