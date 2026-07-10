@@ -60,18 +60,24 @@ target 'LoveLink' do
       :ccache_enabled => ccache_enabled?(podfile_properties),
     )
 
-    # Xcode 16.2 can crash while compiling NitroIap's generated Swift/C++ bridge sources on simulator.
-    # Keep device builds unchanged, and compile a minimal NitroIap target for simulator runs.
+    # Nitro IAP's Swift/C++ bridge imports Xcode's CxxStdlib module, which has
+    # a minimum iOS 16 deployment target in Xcode 16. Keep every Pod aligned
+    # with the app's iOS 16 minimum so simulator and device builds use the
+    # complete payment implementation.
     installer.pods_project.targets.each do |target|
-      next unless target.name == 'NitroIap'
-
       target.build_configurations.each do |build_config|
-        build_config.build_settings['EXCLUDED_SOURCE_FILE_NAMES[sdk=iphonesimulator*]'] = '*.swift *.mm *.cpp'
-        build_config.build_settings['INCLUDED_SOURCE_FILE_NAMES[sdk=iphonesimulator*]'] = 'RnIapLog.swift'
-        build_config.build_settings['SWIFT_COMPILATION_MODE'] = 'singlefile'
-        build_config.build_settings['SWIFT_ENABLE_BATCH_MODE'] = 'NO'
-        build_config.build_settings['SWIFT_REFLECTION_METADATA_LEVEL'] = 'none'
+        build_config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '16.0'
+
+        # Xcode 16.2 can crash during NitroIap IR generation when compiling
+        # generated Swift files in a batch with reflection metadata enabled.
+        # Compile those files individually while retaining the full module.
+        if target.name == 'NitroIap'
+          build_config.build_settings['SWIFT_COMPILATION_MODE'] = 'singlefile'
+          build_config.build_settings['SWIFT_ENABLE_BATCH_MODE'] = 'NO'
+          build_config.build_settings['SWIFT_REFLECTION_METADATA_LEVEL'] = 'none'
+        end
       end
     end
+
   end
 end

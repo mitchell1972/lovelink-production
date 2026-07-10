@@ -1,27 +1,27 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
-import { getTrialAccessStatus, TRIAL_GATED_FEATURES } from '../services/premiumService';
+import { getSubscriptionAccessStatus, SUBSCRIPTION_GATED_FEATURES } from '../services/premiumService';
 import { Card, Heading, Subheading, Button, colors } from '../components/ui';
 
 export const HomeScreen = ({ onNavigate, unreadIndicators = {} }) => {
   const { user, profile, partnership } = useAuth();
-  const [trialStatus, setTrialStatus] = useState(null);
+  const [subscriptionStatus, setSubscriptionStatus] = useState(null);
   const userName = profile?.name || user?.user_metadata?.name || 'there';
   const partnerName = partnership?.partner?.name || 'Partner';
 
   useEffect(() => {
     let isMounted = true;
 
-    const loadTrialStatus = async () => {
+    const loadSubscriptionStatus = async () => {
       if (!user?.id) return;
-      const status = await getTrialAccessStatus(user.id);
+      const status = await getSubscriptionAccessStatus(user.id);
       if (isMounted) {
-        setTrialStatus(status);
+        setSubscriptionStatus(status);
       }
     };
 
-    loadTrialStatus();
+    loadSubscriptionStatus();
 
     return () => {
       isMounted = false;
@@ -60,9 +60,9 @@ export const HomeScreen = ({ onNavigate, unreadIndicators = {} }) => {
   ];
 
   const isFeatureLocked = (featureId) =>
-    !!trialStatus &&
-    !trialStatus.hasAccess &&
-    TRIAL_GATED_FEATURES.includes(featureId);
+    !!subscriptionStatus &&
+    !subscriptionStatus.hasAccess &&
+    SUBSCRIPTION_GATED_FEATURES.includes(featureId);
 
   const handleFeaturePress = (featureId) => {
     if (!isFeatureLocked(featureId)) {
@@ -72,7 +72,7 @@ export const HomeScreen = ({ onNavigate, unreadIndicators = {} }) => {
 
     Alert.alert(
       'Subscription Required',
-      'Your 7-day free trial has ended. Subscribe to keep using Daily Session, Moments, Pulse, and Plans.',
+      'Start a subscription to unlock LoveLink. You will not be charged for the first 7 days.',
       [
         { text: 'Not Now', style: 'cancel' },
         { text: 'Go Premium', onPress: () => onNavigate('premium') },
@@ -80,24 +80,13 @@ export const HomeScreen = ({ onNavigate, unreadIndicators = {} }) => {
     );
   };
 
-  const renderTrialBanner = () => {
-    if (!trialStatus || trialStatus.isPremium) return null;
-
-    if (trialStatus.isInTrial) {
-      const dayLabel = trialStatus.daysRemaining === 1 ? 'day' : 'days';
-      return (
-        <TouchableOpacity style={styles.trialBanner} onPress={() => onNavigate('premium')}>
-          <Text style={styles.trialBannerText}>
-            ⏳ Free trial: {trialStatus.daysRemaining} {dayLabel} left
-          </Text>
-        </TouchableOpacity>
-      );
-    }
+  const renderSubscriptionBanner = () => {
+    if (!subscriptionStatus || subscriptionStatus.hasAccess) return null;
 
     return (
-      <TouchableOpacity style={styles.trialExpiredBanner} onPress={() => onNavigate('premium')}>
-        <Text style={styles.trialExpiredText}>
-          🔒 Trial ended - Subscribe to unlock Daily Session, Moments, Pulse, and Plans
+      <TouchableOpacity style={styles.trialBanner} onPress={() => onNavigate('premium')}>
+        <Text style={styles.trialBannerText}>
+          ✨ Start your 7-day free trial to unlock LoveLink
         </Text>
       </TouchableOpacity>
     );
@@ -118,7 +107,7 @@ export const HomeScreen = ({ onNavigate, unreadIndicators = {} }) => {
         </TouchableOpacity>
       </View>
 
-      {renderTrialBanner()}
+      {renderSubscriptionBanner()}
 
       <View style={styles.features}>
         {features.map((feature) => {

@@ -20,7 +20,7 @@ import {
   SettingsScreen,
 } from './src/screens';
 import { isSupabaseConfigured } from './src/config/supabase';
-import { getTrialAccessStatus, TRIAL_GATED_FEATURES } from './src/services/premiumService';
+import { getSubscriptionAccessStatus, SUBSCRIPTION_GATED_FEATURES } from './src/services/premiumService';
 import { inAppAlertsService } from './src/services/inAppAlertsService';
 
 // Screens that handle their own scrolling (have FlatList or ScrollView)
@@ -39,10 +39,19 @@ const AppContent = () => {
   const [authScreen, setAuthScreen] = useState('signup');
   const [currentScreen, setCurrentScreen] = useState('home');
   const [unreadIndicators, setUnreadIndicators] = useState(EMPTY_UNREAD);
+  const [subscriptionAccess, setSubscriptionAccess] = useState(null);
 
   const handleNavigate = useCallback(
     async (screen) => {
       if (FEATURE_SCREEN_IDS.includes(screen) && user?.id) {
+        if (!subscriptionAccess?.hasAccess) {
+          Alert.alert(
+            'Start your free trial',
+            'Start a subscription to unlock LoveLink. You will not be charged for the first 7 days.',
+            [{ text: 'Choose a plan', onPress: () => setCurrentScreen('premium') }]
+          );
+          return;
+        }
         // Verify code validity before entering any feature screen.
         const latestPartnership = await verifyPartnership();
         if (!latestPartnership?.id) {
@@ -63,8 +72,30 @@ const AppContent = () => {
         });
       }
     },
-    [verifyPartnership, user?.id]
+    [verifyPartnership, user?.id, subscriptionAccess?.hasAccess]
   );
+
+  useEffect(() => {
+    let isActive = true;
+
+    const loadSubscriptionAccess = async () => {
+      if (!user?.id) {
+        if (isActive) setSubscriptionAccess(null);
+        return;
+      }
+
+      setSubscriptionAccess(null);
+      const status = await getSubscriptionAccessStatus(user.id);
+      if (!isActive) return;
+
+      setSubscriptionAccess(status);
+      // Every authenticated user must subscribe before partner linking or use.
+      if (!status.hasAccess) setCurrentScreen('premium');
+    };
+
+    loadSubscriptionAccess();
+    return () => { isActive = false; };
+  }, [user?.id, isPaired]);
 
   // Expose navigation for automated testing (dev only)
   useEffect(() => {
@@ -80,15 +111,15 @@ const AppContent = () => {
 
     const enforceTrialGate = async () => {
       if (!user?.id || !isPaired) return;
-      if (!TRIAL_GATED_FEATURES.includes(currentScreen)) return;
+      if (!SUBSCRIPTION_GATED_FEATURES.includes(currentScreen)) return;
 
-      const status = await getTrialAccessStatus(user.id);
+      const status = await getSubscriptionAccessStatus(user.id);
       if (!isActive) return;
 
       if (!status.hasAccess) {
         Alert.alert(
           'Subscription Required',
-          'Your 7-day free trial has ended. Subscribe to keep using Daily Session, Moments, Pulse, and Plans.',
+          'Start a subscription to unlock LoveLink. You will not be charged for the first 7 days.',
           [{ text: 'OK', onPress: () => setCurrentScreen('premium') }]
         );
       }
@@ -190,6 +221,29 @@ const AppContent = () => {
     );
   }
 
+  if (subscriptionAccess === null) {
+    return <LoadingScreen message="Checking subscription..." />;
+  }
+
+  if (!subscriptionAccess.hasAccess) {
+    return (
+      <GradientBackground>
+        <StatusBar barStyle="light-content" />
+        <Header />
+        <View style={styles.screenContainer}>
+          <PremiumScreen
+            subscriptionRequired
+            onNavigate={handleNavigate}
+            onSubscriptionActivated={(status) => {
+              setSubscriptionAccess(status);
+              setCurrentScreen('home');
+            }}
+          />
+        </View>
+      </GradientBackground>
+    );
+  }
+
   if (!isPaired) {
     return (
       <GradientBackground>
@@ -219,7 +273,13 @@ const AppContent = () => {
       case 'plan':
         return <PlanScreen onNavigate={handleNavigate} />;
       case 'premium':
-        return <PremiumScreen onNavigate={handleNavigate} />;
+        return <PremiumScreen
+          onNavigate={handleNavigate}
+          onSubscriptionActivated={(status) => {
+            setSubscriptionAccess(status);
+            setCurrentScreen('home');
+          }}
+        />;
       case 'settings':
         return <SettingsScreen onNavigate={handleNavigate} />;
       default:
