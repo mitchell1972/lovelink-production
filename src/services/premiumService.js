@@ -78,7 +78,7 @@ const isPremiumValid = (profile) =>
   new Date(profile.premium_expires) > new Date();
 
 /**
- * Resolve partner id from active partnerships when profile.partner_id is absent.
+ * Resolve the partner id only from an active partnership.
  */
 const getPartnerIdFromActivePartnership = async (userId) => {
   const { data: partnerships, error } = await supabase
@@ -107,7 +107,7 @@ export const getPremiumStatus = async (userId) => {
   try {
     const { data, error } = await supabase
       .from('profiles')
-      .select('is_premium, premium_since, premium_expires, premium_plan, premium_granted_by, partner_id')
+      .select('is_premium, premium_since, premium_expires, premium_plan, premium_granted_by')
       .eq('id', userId)
       .single();
 
@@ -124,9 +124,9 @@ export const getPremiumStatus = async (userId) => {
       };
     }
 
-    // If not premium, check partner's premium status.
-    // We first try profile.partner_id, then fall back to active partnerships.
-    const partnerId = data.partner_id || await getPartnerIdFromActivePartnership(userId);
+    // A cached profile.partner_id can outlive a partnership. Only the active
+    // partnership relation is authoritative for shared subscription access.
+    const partnerId = await getPartnerIdFromActivePartnership(userId);
     if (partnerId) {
       const { data: partner, error: partnerError } = await supabase
         .from('profiles')

@@ -27,6 +27,7 @@ const legacySubscriptionSkus = [
 ];
 const validPlans = new Set(['monthly', 'yearly']);
 const GOOGLE_PLAY_VERIFY_FUNCTION = 'verify-google-play-subscription';
+const APP_STORE_VERIFY_FUNCTION = 'verify-app-store-subscription';
 
 const isSupportedSubscriptionProductId = (productId) =>
   typeof productId === 'string' &&
@@ -110,6 +111,13 @@ const getStorePurchaseReference = (purchase) =>
   purchase?.transactionReceipt ||
   null;
 
+const getSignedAppleTransaction = (purchase) => [
+  purchase?.purchaseToken,
+  purchase?.transactionReceipt,
+].find((candidate) =>
+  typeof candidate === 'string' && candidate.split('.').length === 3
+) || null;
+
 const isSevenDayFreeTrialPhase = (phase) =>
   phase?.billingPeriod === 'P7D' && Number(phase?.priceAmountMicros) === 0;
 
@@ -186,14 +194,6 @@ const isEligibleForSevenDayFreeTrialOffer = async (product) => {
     error('Unable to verify introductory-offer eligibility:', err);
     return false;
   }
-};
-
-const calculatePremiumExpiry = (plan) => {
-  const now = new Date();
-  if (plan === 'yearly') {
-    return new Date(now.setFullYear(now.getFullYear() + 1));
-  }
-  return new Date(now.setMonth(now.getMonth() + 1));
 };
 
 class IAPService {
@@ -452,13 +452,12 @@ class IAPService {
   }
 
   /**
-   * Reconcile Google Play with the server before trusting the cached profile.
-   * The Edge Function validates the purchase token with Google and writes the
-   * store-provided expiry. A refresh without a local purchase lets the server
-   * revoke an expired or canceled entitlement it already knows about.
+   * Reconcile the native store with the server before trusting cached premium.
+   * Google and Apple verification endpoints write only store-provided state. A
+   * refresh without a local purchase handles renewals, expiry, and revocation.
    */
   async syncSubscriptionEntitlement(userId) {
-    if (Platform.OS !== 'android' || !userId) {
+    if (!['android', 'ios'].includes(Platform.OS) || !userId) {
       return { success: true, skipped: true };
     }
 
@@ -468,13 +467,19 @@ class IAPService {
         .filter((candidate) => isSupportedSubscriptionProductId(candidate?.productId))
         .sort((a, b) => (b.transactionDate || 0) - (a.transactionDate || 0))[0];
 
-      if (purchase?.purchaseToken) {
+      const hasPlatformProof = Platform.OS === 'android'
+        ? Boolean(purchase?.purchaseToken)
+        : Boolean(purchase?.transactionId || getSignedAppleTransaction(purchase));
+      if (purchase && hasPlatformProof) {
         const plan = getPlanForProductId(purchase.productId);
         return await this.savePurchaseToDatabase(userId, purchase, plan);
       }
 
+      const verificationFunction = Platform.OS === 'android'
+        ? GOOGLE_PLAY_VERIFY_FUNCTION
+        : APP_STORE_VERIFY_FUNCTION;
       const { data, error: invokeError } = await supabase.functions.invoke(
-        GOOGLE_PLAY_VERIFY_FUNCTION,
+        verificationFunction,
         { body: { action: 'refresh' } }
       );
 
@@ -588,27 +593,32 @@ class IAPService {
         return { success: true, data };
       }
 
-      // Temporary iOS compatibility path. Android never reaches this RPC:
-      // Google Play purchases are always verified by the server above.
-      const premiumSince = new Date().toISOString();
-      const premiumExpires = calculatePremiumExpiry(plan).toISOString();
-
-      const { data: rpcData, error: rpcError } = await supabase.rpc('grant_premium_from_iap', {
-        p_user_id: userId,
-        p_product_id: purchase.productId,
-        p_transaction_id: purchaseReference,
-        p_plan: plan,
-        p_premium_since: premiumSince,
-        p_premium_expires: premiumExpires,
-      });
-
-      if (!rpcError) {
-        if (rpcData && typeof rpcData === 'object' && rpcData.success === false) {
-          return { success: false, error: rpcData.error || 'Failed to save purchase' };
-        }
-        return { success: true, data: rpcData };
+      const signedTransaction = getSignedAppleTransaction(purchase);
+      if (!purchase.transactionId && !signedTransaction) {
+        return { success: false, error: 'Missing App Store transaction proof' };
       }
-      throw rpcError;
+
+      const { data, error: invokeError } = await supabase.functions.invoke(
+        APP_STORE_VERIFY_FUNCTION,
+        {
+          body: {
+            action: 'verify',
+            productId: purchase.productId,
+            transactionId: purchase.transactionId || null,
+            signedTransaction,
+          },
+        }
+      );
+
+      if (invokeError) throw invokeError;
+      if (!data?.success || !data?.active) {
+        return {
+          success: false,
+          error: data?.error || 'The App Store could not verify an active subscription',
+        };
+      }
+
+      return { success: true, data };
     } catch (err) {
       error('Error saving purchase:', err);
       return { success: false, error: err.message };
@@ -628,24 +638,10 @@ class IAPService {
         async (purchase) => {
           log('Purchase updated:', purchase);
 
-          const receipt = purchase.transactionReceipt;
-          if (receipt) {
-            // Finish the transaction
-            try {
-              if (Platform.OS === 'ios') {
-                await RNIap.finishTransaction({ purchase, isConsumable: false });
-              } else if (typeof RNIap.acknowledgePurchaseAndroid === 'function') {
-                await RNIap.acknowledgePurchaseAndroid({
-                  token: purchase.purchaseToken,
-                });
-              }
-
-              if (onPurchaseSuccess) {
-                onPurchaseSuccess(purchase);
-              }
-            } catch (err) {
-              error('Error finishing transaction:', err);
-            }
+          if (hasPurchaseProof(purchase) && onPurchaseSuccess) {
+            // The callback must verify and persist the entitlement before it
+            // calls finishPurchaseTransaction. Never acknowledge here first.
+            onPurchaseSuccess(purchase);
           }
         }
       );

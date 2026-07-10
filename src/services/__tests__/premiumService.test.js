@@ -145,6 +145,24 @@ describe('premiumService', () => {
     });
   });
 
+  it('does not use a stale profile partner id after the active partnership ended', async () => {
+    setupSupabase({
+      userProfile: buildProfile({ partner_id: 'user-2' }),
+      partnerProfile: buildProfile({
+        is_premium: true,
+        premium_expires: '2099-01-01T00:00:00.000Z',
+        premium_plan: 'yearly',
+        name: 'Former partner',
+      }),
+      partnershipRows: [],
+    });
+
+    await expect(getPremiumStatus('user-1')).resolves.toMatchObject({
+      isPremium: false,
+      source: null,
+    });
+  });
+
   it('enforces the moments limit for a user without a subscription', async () => {
     setupSupabase({
       partnershipRows: [{ id: 'partnership-1' }],

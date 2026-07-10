@@ -27,6 +27,7 @@ import { iapService } from './src/services/iapService';
 // Screens that handle their own scrolling (have FlatList or ScrollView)
 const SELF_SCROLLING_SCREENS = ['moments', 'home', 'pulse', 'premium', 'settings', 'session', 'plan'];
 const FEATURE_SCREEN_IDS = ['session', 'moments', 'pulse', 'plan'];
+const isNativeStorePlatform = ['ios', 'android'].includes(Platform.OS);
 const EMPTY_UNREAD = {
   session: false,
   moments: false,
@@ -86,7 +87,7 @@ const AppContent = () => {
       }
 
       setSubscriptionAccess(null);
-      if (Platform.OS === 'android') {
+      if (isNativeStorePlatform) {
         await iapService.syncSubscriptionEntitlement(user.id);
       }
       const status = await getSubscriptionAccessStatus(user.id);
@@ -101,10 +102,10 @@ const AppContent = () => {
     return () => { isActive = false; };
   }, [user?.id, isPaired]);
 
-  // Reconcile cancellations, trial expiry, and renewals whenever Android
-  // returns to the foreground instead of trusting a stale in-memory grant.
+  // Reconcile cancellations, trial expiry, renewals, refunds, and revocations
+  // whenever either native app returns to the foreground.
   useEffect(() => {
-    if (Platform.OS !== 'android' || !user?.id) return undefined;
+    if (!isNativeStorePlatform || !user?.id) return undefined;
 
     let refreshing = false;
     const subscription = AppState.addEventListener('change', async (nextState) => {
@@ -140,7 +141,7 @@ const AppContent = () => {
       if (!user?.id || !isPaired) return;
       if (!SUBSCRIPTION_GATED_FEATURES.includes(currentScreen)) return;
 
-      if (Platform.OS === 'android') {
+      if (isNativeStorePlatform) {
         await iapService.syncSubscriptionEntitlement(user.id);
       }
       const status = await getSubscriptionAccessStatus(user.id);

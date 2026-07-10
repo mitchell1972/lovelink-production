@@ -379,9 +379,12 @@ describe('iapService', () => {
     );
   });
 
-  it('keeps the legacy grant RPC limited to the currently released iOS path', async () => {
+  it('sends iOS transactions to the Apple server verifier and never calls the legacy grant RPC', async () => {
     const { supabase } = require('../../config/supabase');
-    supabase.rpc.mockResolvedValue({ data: { success: true }, error: null });
+    supabase.functions.invoke.mockResolvedValue({
+      data: { success: true, active: true, expiresAt: '2099-01-01T00:00:00Z' },
+      error: null,
+    });
 
     const result = await iapService.savePurchaseToDatabase(
       '550e8400-e29b-41d4-a716-446655440000',
@@ -389,11 +392,50 @@ describe('iapService', () => {
       'monthly'
     );
 
-    expect(result).toEqual({ success: true, data: { success: true } });
-    expect(supabase.rpc).toHaveBeenCalledWith(
-      'grant_premium_from_iap',
-      expect.objectContaining({ p_transaction_id: 'transaction-1' })
+    expect(result).toEqual(expect.objectContaining({ success: true }));
+    expect(supabase.functions.invoke).toHaveBeenCalledWith(
+      'verify-app-store-subscription',
+      {
+        body: {
+          action: 'verify',
+          productId: PRODUCT_IDS.MONTHLY,
+          transactionId: 'transaction-1',
+          signedTransaction: null,
+        },
+      }
     );
-    expect(supabase.functions.invoke).not.toHaveBeenCalled();
+    expect(supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  it('asks the backend to refresh an iOS entitlement when StoreKit returns no local subscription', async () => {
+    const { supabase } = require('../../config/supabase');
+    mockRNIap.getActiveSubscriptions.mockResolvedValue([]);
+    supabase.functions.invoke.mockResolvedValue({
+      data: { success: true, active: false, reason: 'no_entitlement' },
+      error: null,
+    });
+
+    const result = await iapService.syncSubscriptionEntitlement('user-1');
+
+    expect(result).toEqual(expect.objectContaining({ success: true }));
+    expect(supabase.functions.invoke).toHaveBeenCalledWith(
+      'verify-app-store-subscription',
+      { body: { action: 'refresh' } }
+    );
+  });
+
+  it('does not finish listener transactions before the entitlement callback verifies them', async () => {
+    const onPurchaseSuccess = jest.fn();
+    let listener;
+    mockRNIap.purchaseUpdatedListener.mockImplementation((callback) => {
+      listener = callback;
+      return { remove: jest.fn() };
+    });
+
+    iapService.setupListeners(onPurchaseSuccess, jest.fn());
+    await listener(subscription(PRODUCT_IDS.MONTHLY));
+
+    expect(onPurchaseSuccess).toHaveBeenCalledWith(subscription(PRODUCT_IDS.MONTHLY));
+    expect(mockRNIap.finishTransaction).not.toHaveBeenCalled();
   });
 });
