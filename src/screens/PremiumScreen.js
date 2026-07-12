@@ -110,13 +110,12 @@ export default function PremiumScreen({ onNavigate, onSubscriptionActivated, sub
         setIapUnavailableReason(msg);
       } else {
         setIapUnavailableReason(null);
-        // Only show plans whose returned store offer really starts with the
-        // required seven-day free trial and whose store account is eligible.
+        // Prefer a plan whose store offer starts with the seven-day free
+        // trial. Accounts that already used their one-time trial can still
+        // subscribe — the paywall copy switches to immediate billing.
         const hasMonthlyTrial = eligibleProductIds.includes(PRODUCT_IDS.MONTHLY);
         const hasYearlyTrial = eligibleProductIds.includes(PRODUCT_IDS.YEARLY);
-        if (!hasMonthlyTrial && !hasYearlyTrial) {
-          setIapUnavailableReason('This store account is not currently eligible for a 7-day free trial, so LoveLink will not begin a purchase that could charge today.');
-        } else if (selectedPlan === 'monthly' && !hasMonthlyTrial && hasYearlyTrial) {
+        if (selectedPlan === 'monthly' && !hasMonthlyTrial && hasYearlyTrial) {
           setSelectedPlan('yearly');
         } else if (selectedPlan === 'yearly' && !hasYearlyTrial && hasMonthlyTrial) {
           setSelectedPlan('monthly');
@@ -151,6 +150,8 @@ export default function PremiumScreen({ onNavigate, onSubscriptionActivated, sub
       return;
     }
     const productId = chosen.productId;
+    const startsWithFreeTrial = hasSevenDayFreeTrial(chosen) &&
+      eligibleTrialProductIds.includes(productId);
 
     setPurchasing(true);
 
@@ -182,7 +183,9 @@ export default function PremiumScreen({ onNavigate, onSubscriptionActivated, sub
 
         Alert.alert(
           '🎉 Subscription active!',
-          'LoveLink is now unlocked for both you and your partner. Your 7-day free trial has started and the store will charge only after it ends.',
+          startsWithFreeTrial
+            ? 'LoveLink is now unlocked for both you and your partner. Your 7-day free trial has started and the store will charge only after it ends.'
+            : 'LoveLink is now unlocked for both you and your partner.',
           [{ text: 'Continue', onPress: () => onSubscriptionActivated?.(accessStatus) }]
         );
       } else if (result.cancelled) {
@@ -327,7 +330,12 @@ export default function PremiumScreen({ onNavigate, onSubscriptionActivated, sub
   const yearlyTrialAvailable = yearlyAvailable &&
     hasSevenDayFreeTrial(yearlyProduct) &&
     eligibleTrialProductIds.includes(PRODUCT_IDS.YEARLY);
-  const selectedPlanAvailable = selectedPlan === 'yearly' ? yearlyTrialAvailable : monthlyTrialAvailable;
+  // A plan can be bought whenever the store returned it; the trial flags only
+  // decide the copy so nobody is promised a free week the store will not give.
+  const selectedPlanAvailable = selectedPlan === 'yearly' ? yearlyAvailable : monthlyAvailable;
+  const selectedPlanHasTrial = selectedPlan === 'yearly' ? yearlyTrialAvailable : monthlyTrialAvailable;
+  const trialUnavailableForAccount = (monthlyAvailable || yearlyAvailable) &&
+    !monthlyTrialAvailable && !yearlyTrialAvailable;
 
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
@@ -361,10 +369,14 @@ export default function PremiumScreen({ onNavigate, onSubscriptionActivated, sub
         </View>
       ) : (
         <View style={styles.freeBanner}>
-          <Text style={styles.freeBannerIcon}>🆓</Text>
-          <Text style={styles.freeBannerTitle}>Start with 7 days free</Text>
+          <Text style={styles.freeBannerIcon}>{trialUnavailableForAccount ? '💎' : '🆓'}</Text>
+          <Text style={styles.freeBannerTitle}>
+            {trialUnavailableForAccount ? 'Unlock LoveLink Premium' : 'Start with 7 days free'}
+          </Text>
           <Text style={styles.freeBannerSubtitle}>
-            Start a subscription to unlock LoveLink — no charge today
+            {trialUnavailableForAccount
+              ? 'One subscription unlocks LoveLink for you and your partner'
+              : 'Start a subscription to unlock LoveLink — no charge today'}
           </Text>
         </View>
       )}
@@ -385,15 +397,17 @@ export default function PremiumScreen({ onNavigate, onSubscriptionActivated, sub
             style={[
               styles.planOption,
               selectedPlan === 'monthly' && styles.planOptionSelected,
-              !monthlyTrialAvailable && styles.buttonDisabled,
+              !monthlyAvailable && styles.buttonDisabled,
             ]}
             onPress={() => setSelectedPlan('monthly')}
-            disabled={!monthlyTrialAvailable}
+            disabled={!monthlyAvailable}
           >
             <View style={styles.planInfo}>
               <Text style={styles.planName}>Monthly</Text>
               <Text style={styles.planPrice}>{getDisplayPrice('monthly')}</Text>
-              <Text style={styles.planSavings}>7 days free, then renews monthly</Text>
+              <Text style={styles.planSavings}>
+                {monthlyTrialAvailable ? '7 days free, then renews monthly' : 'Renews monthly'}
+              </Text>
             </View>
             <View style={[
               styles.planRadio,
@@ -408,15 +422,17 @@ export default function PremiumScreen({ onNavigate, onSubscriptionActivated, sub
             style={[
               styles.planOption,
               selectedPlan === 'yearly' && styles.planOptionSelected,
-              !yearlyTrialAvailable && styles.buttonDisabled,
+              !yearlyAvailable && styles.buttonDisabled,
             ]}
             onPress={() => setSelectedPlan('yearly')}
-            disabled={!yearlyTrialAvailable}
+            disabled={!yearlyAvailable}
           >
             <View style={styles.planInfo}>
               <Text style={styles.planName}>Yearly</Text>
               <Text style={styles.planPrice}>{getDisplayPrice('yearly')}</Text>
-              <Text style={styles.planSavings}>7 days free, then renews yearly • Save 33%</Text>
+              <Text style={styles.planSavings}>
+                {yearlyTrialAvailable ? '7 days free, then renews yearly • Save 33%' : 'Renews yearly • Save 33%'}
+              </Text>
             </View>
             <View style={[
               styles.planRadio,
@@ -433,6 +449,16 @@ export default function PremiumScreen({ onNavigate, onSubscriptionActivated, sub
         <View style={styles.iapUnavailableCard}>
           <Text style={styles.iapUnavailableTitle}>Subscription Setup Pending</Text>
           <Text style={styles.iapUnavailableText}>{iapUnavailableReason}</Text>
+        </View>
+      )}
+
+      {/* Accounts that already used the one-time trial can still subscribe. */}
+      {!isPremium && !iapUnavailableReason && trialUnavailableForAccount && (
+        <View style={styles.iapUnavailableCard}>
+          <Text style={styles.iapUnavailableTitle}>Free Trial Already Used</Text>
+          <Text style={styles.iapUnavailableText}>
+            This store account has already used its 7-day free trial, so billing starts as soon as you subscribe.
+          </Text>
         </View>
       )}
 
@@ -460,7 +486,7 @@ export default function PremiumScreen({ onNavigate, onSubscriptionActivated, sub
               <>
                 <Text style={styles.subscribeButtonIcon}>💎</Text>
                 <Text style={styles.subscribeButtonText}>
-                  Start 7-Day Free Trial
+                  {selectedPlanHasTrial ? 'Start 7-Day Free Trial' : 'Subscribe Now'}
                 </Text>
               </>
             )}

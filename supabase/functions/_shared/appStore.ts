@@ -1,24 +1,32 @@
-import {
-  AppStoreServerAPIClient,
-  Environment,
-  SignedDataVerifier,
-} from 'npm:@apple/app-store-server-library@3.1.0';
+import { SignJWT, decodeJwt, importPKCS8 } from 'npm:jose@5.9.6';
 import { Buffer } from 'node:buffer';
 
+// TRUST MODEL
+//
+// Supabase Edge Functions run on Deno, whose node:crypto lacks the pieces
+// @apple/app-store-server-library needs (jsonwebtoken rejects P-256 keys it
+// reports as "p256", and X509Certificate is unimplemented), so Apple's JWS
+// certificate-chain verification cannot run on this runtime.
+//
+// Instead of hand-rolling PKI, entitlement decisions are anchored elsewhere:
+// every grant or revocation is computed ONLY from a subscription-status
+// response fetched directly from Apple's App Store Server API over TLS
+// (fetchAppleSubscription below). Signed payloads received from devices or
+// webhooks are DECODED WITHOUT SIGNATURE VERIFICATION and used purely as
+// lookup hints (transaction ids, environment) and fast-fail UX checks.
+// Nothing decoded from an unverified payload may decide ownership or access.
+
 export const APPLE_BUNDLE_ID = 'com.mitchellagoma.lovelink';
-export const APPLE_APP_ID = 6756896604;
 export const APPLE_SUPPORTED_PRODUCTS = new Set([
   'com.lovelinkcouples.premium.monthly',
   'com.lovelinkcouples.premium.yearly',
 ]);
 
-// DER-encoded Apple roots downloaded from Apple's public PKI repository:
-// https://www.apple.com/certificateauthority/
-const APPLE_ROOT_CERTIFICATES = [
-  'MIIEuzCCA6OgAwIBAgIBAjANBgkqhkiG9w0BAQUFADBiMQswCQYDVQQGEwJVUzETMBEGA1UEChMKQXBwbGUgSW5jLjEmMCQGA1UECxMdQXBwbGUgQ2VydGlmaWNhdGlvbiBBdXRob3JpdHkxFjAUBgNVBAMTDUFwcGxlIFJvb3QgQ0EwHhcNMDYwNDI1MjE0MDM2WhcNMzUwMjA5MjE0MDM2WjBiMQswCQYDVQQGEwJVUzETMBEGA1UEChMKQXBwbGUgSW5jLjEmMCQGA1UECxMdQXBwbGUgQ2VydGlmaWNhdGlvbiBBdXRob3JpdHkxFjAUBgNVBAMTDUFwcGxlIFJvb3QgQ0EwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDkkakJH5HbHkdQ6wXtXnmELes2oldMVeyLGYne+Uts9QerIjAC6Bg++FAJ039BqJj50cpmnCRrEdCju+QbKsMflZ56DKRHi1vUFjczy8QPTc4UadHJGXL1XQ7Vf1+b8iUDulWPTV0N8WQ1IxVLFVkds5T39pyez1C6wVhQZ48ItCD3y6wsIG9wtj8BMIy3Q88PnT3zK0koGsj+zrW5DtleHNbLPbU6rfQPDgCSC7EhFi501TwN22IWq6NxkkdTVcGvL0Gz+PvjcM3mo0xFfh9Ma1CWQYnEdGILEINBhzOKgbEwWOxaBDKMaLOPHd5lc/9nXmW8Sdh2nzMUZaF3lMktAgMBAAGjggF6MIIBdjAOBgNVHQ8BAf8EBAMCAQYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUK9BpR5R2Cf70a40uQKb3R01/CF4wHwYDVR0jBBgwFoAUK9BpR5R2Cf70a40uQKb3R01/CF4wggERBgNVHSAEggEIMIIBBDCCAQAGCSqGSIb3Y2QFATCB8jAqBggrBgEFBQcCARYeaHR0cHM6Ly93d3cuYXBwbGUuY29tL2FwcGxlY2EvMIHDBggrBgEFBQcCAjCBthqBs1JlbGlhbmNlIG9uIHRoaXMgY2VydGlmaWNhdGUgYnkgYW55IHBhcnR5IGFzc3VtZXMgYWNjZXB0YW5jZSBvZiB0aGUgdGhlbiBhcHBsaWNhYmxlIHN0YW5kYXJkIHRlcm1zIGFuZCBjb25kaXRpb25zIG9mIHVzZSwgY2VydGlmaWNhdGUgcG9saWN5IGFuZCBjZXJ0aWZpY2F0aW9uIHByYWN0aWNlIHN0YXRlbWVudHMuMA0GCSqGSIb3DQEBBQUAA4IBAQBcNplMLXi37Yyb3PN3m/J20ncwT8EfhYOFG5k9RzfyqZtAjizUsZAS2L70c5vu0mQPy3lPNNiiPvl4/2vIB+x9OYOLUyDTOMSxv5pPCmv/K/xZpwUJfBdAVhEedNO3iyM7R6PVbyTi69G3cN8PReEnyvFteO3ntRcXqNx+IjXKJdXZD9Zr1KIkIxH3oayPc4FgxhtbCS+SsvhESPBgOJ4V9T0mZyCKM2r3DYLP3uujL/lTaltkwGMzd/c6ByxW69oPIQ7aunMZT7XZNn/Bh1XZp5m5MkL72NVxnn6hUrcbvZNCJBIqxw8dtk2cXmPIS4AXUKqK1drk/NAJBzewdXUh',
-  'MIIFkjCCA3qgAwIBAgIIAeDltYNno+AwDQYJKoZIhvcNAQEMBQAwZzEbMBkGA1UEAwwSQXBwbGUgUm9vdCBDQSAtIEcyMSYwJAYDVQQLDB1BcHBsZSBDZXJ0aWZpY2F0aW9uIEF1dGhvcml0eTETMBEGA1UECgwKQXBwbGUgSW5jLjELMAkGA1UEBhMCVVMwHhcNMTQwNDMwMTgxMDA5WhcNMzkwNDMwMTgxMDA5WjBnMRswGQYDVQQDDBJBcHBsZSBSb290IENBIC0gRzIxJjAkBgNVBAsMHUFwcGxlIENlcnRpZmljYXRpb24gQXV0aG9yaXR5MRMwEQYDVQQKDApBcHBsZSBJbmMuMQswCQYDVQQGEwJVUzCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBANgREkhI2imKScUcx+xuM23+TfvgHN6sXuI2pyT5f1BrTM65MFQn5bPW7SXmMLYFN14UIhHF6Kob0vuy0gmVOKTvKkmMXT5xZgM4+xb1hYjkWpIMBDLyyED7Ul+f9sDx47pFoFDVEovy3d6RhiPw9bZyLgHaC/YuOQhfGaFjQQscp5TBhsRTL3b2CtcM0YM/GlMZ81fVJ3/8E7j4ko380yhDPLVoACVdJ2LT3VXdRCCQgzWTxb+4Gftr49wIQuavbfqeQMpOhYV4SbHXw8EwOTKrfl+q04tvny0aIWhwZ7Oj8ZhBbZF8+NfbqOdfIRqMM78xdLe40fTgIvS/cjTf94FNcX1RoeKz8NMoFnNvzcytN31O661A4T+B/fc9Cj6i8b0xlilZ3MIZgIxbdMYs0xBTJh0UT8TUgWY8h2czJxQI6bR3hDRSj4n4aJgXv8O7qhOTH11UL6jHfPsNFL4VPSQ08prcdUFmIrQB1guvkJ4M6mL4m1k8COKWNORj3rw31OsMiANDC1CvoDTdUE0V+1ok2Az6DGOeHwOx4e7hqkP0ZmUoNwIx7wHHHtHMn23KVDpA287PT0aLSmWaasZobNfMmRtHsHLDd4/E92GcdB/O/WuhwpyUgquUoue9G7q5cDmVF8Up8zlYNPXEpMZ7YLlmQ1A/bmH8DvmGqmAMQ0uVAgMBAAGjQjBAMB0GA1UdDgQWBBTEmRNsGAPCe8CjoA1/coB6HHcmjTAPBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBBjANBgkqhkiG9w0BAQwFAAOCAgEAUabz4vS4PZO/Lc4Pu1vhVRROTtHlznldgX/+tvCHM/jvlOV+3Gp5pxy+8JS3ptEwnMgNCnWefZKVfhidfsJxaXwU6s+DDuQUQp50DhDNqxq6EWGBeNjxtUVAeKuowM77fWM3aPbn+6/Gw0vsHzYmE1SGlHKy6gLti23kDKaQwFd1z4xCfVzmMX3zybKSaUYOiPjjLUKyOKimGY3xn83uamW8GrAlvacp/fQ+onVJv57byfenHmOZ4VxG/5IFjPoeIPmGlFYl5bRXOJ3riGQUIUkhOb9iZqmxospvPyFgxYnURTbImHy99v6ZSYA7LNKmp4gDBDEZt7Y6YUX6yfIjyGNzv1aJMbDZfGKnexWoiIqrOEDCzBL/FePwN983csvMmOa/orz6JopxVtfnJBtIRD6e/J/JzBrsQzwBvDR4yGn1xuZW7AYJNpDrFEobXsmII9oDMJELuDY++ee1KG++P+w8j2Ud5cAeh6Squpj9kuNsJnfdBrRkBof0Tta6SqoWqPQFZ2aWuuJVecMsXUmPgEkrihLHdoBR37q9ZV0+N0djMenl9MU/S60EinpxLK8JQzcPqOMyT/RFtm2XNuyE9QoB6he7hY1Ck3DDUOUUi78/w0EP3SIEIwiKum1xRKtzCTrJ+VKACd+66eYWyi4uTLLT3OUEVLLUNIAytbwPF+E=',
-  'MIICQzCCAcmgAwIBAgIILcX8iNLFS5UwCgYIKoZIzj0EAwMwZzEbMBkGA1UEAwwSQXBwbGUgUm9vdCBDQSAtIEczMSYwJAYDVQQLDB1BcHBsZSBDZXJ0aWZpY2F0aW9uIEF1dGhvcml0eTETMBEGA1UECgwKQXBwbGUgSW5jLjELMAkGA1UEBhMCVVMwHhcNMTQwNDMwMTgxOTA2WhcNMzkwNDMwMTgxOTA2WjBnMRswGQYDVQQDDBJBcHBsZSBSb290IENBIC0gRzMxJjAkBgNVBAsMHUFwcGxlIENlcnRpZmljYXRpb24gQXV0aG9yaXR5MRMwEQYDVQQKDApBcHBsZSBJbmMuMQswCQYDVQQGEwJVUzB2MBAGByqGSM49AgEGBSuBBAAiA2IABJjpLz1AcqTtkyJygRMc3RCV8cWjTnHcFBbZDuWmBSp3ZHtfTjjTuxxEtX/1H7YyYl3J6YRbTzBPEVoA/VhYDKX1DyxNB0cTddqXl5dvMVztK517IDvYuVTZXpmkOlEKMaNCMEAwHQYDVR0OBBYEFLuw3qFYM4iapIqZ3r6966/ayySrMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQDAgEGMAoGCCqGSM49BAMDA2gAMGUCMQCD6cHEFl4aXTQY2e3v9GwOAEZLuN+yRhHFD/3meoyhpmvOwgPUnPWTxnS4at+qIxUCMG1mihDK1A3UT82NQz60imOlM27jbdoXt2QfyFMm+YhidDkLF1vLUagM6BgD56KyKA==',
-].map((certificate) => Buffer.from(certificate, 'base64'));
+export const Environment = {
+  PRODUCTION: 'Production',
+  SANDBOX: 'Sandbox',
+} as const;
+export type Environment = typeof Environment[keyof typeof Environment];
 
 const requiredEnvironmentValue = (name: string) => {
   const value = Deno.env.get(name)?.trim();
@@ -31,48 +39,116 @@ const getSigningKey = () => Buffer.from(
   'base64'
 ).toString('utf8');
 
-const createClient = (environment: Environment) => new AppStoreServerAPIClient(
-  getSigningKey(),
-  requiredEnvironmentValue('APP_STORE_KEY_ID'),
-  requiredEnvironmentValue('APP_STORE_ISSUER_ID'),
-  APPLE_BUNDLE_ID,
-  environment
-);
+export class AppStoreApiError extends Error {
+  readonly httpStatusCode: number;
+  readonly apiError: number | null;
 
-const createVerifier = (environment: Environment) => new SignedDataVerifier(
-  APPLE_ROOT_CERTIFICATES,
-  true,
-  environment,
-  APPLE_BUNDLE_ID,
-  environment === Environment.PRODUCTION ? APPLE_APP_ID : undefined
-);
-
-const environments = [Environment.PRODUCTION, Environment.SANDBOX];
-
-export const verifyTransactionForAnyEnvironment = async (signedTransaction: string) => {
-  let lastError: unknown;
-  for (const environment of environments) {
-    try {
-      const transaction = await createVerifier(environment).verifyAndDecodeTransaction(signedTransaction);
-      return { environment, transaction };
-    } catch (error) {
-      lastError = error;
-    }
+  constructor(httpStatusCode: number, apiError: number | null) {
+    super(`App Store Server API request failed (HTTP ${httpStatusCode}${
+      apiError == null ? '' : `, Apple error ${apiError}`})`);
+    this.httpStatusCode = httpStatusCode;
+    this.apiError = apiError;
   }
-  throw lastError || new Error('Apple transaction signature is invalid');
+}
+
+export const describeAppleError = (error: unknown): string => {
+  if (error instanceof Error && error.message) return error.message;
+  if (error && typeof error === 'object' && 'httpStatusCode' in error) {
+    const httpStatusCode = Number((error as { httpStatusCode?: unknown }).httpStatusCode);
+    const apiError = (error as { apiError?: unknown }).apiError;
+    return `App Store Server API request failed (HTTP ${httpStatusCode}${
+      apiError == null ? '' : `, Apple error ${apiError}`})`;
+  }
+  return error instanceof Error ? error.constructor.name : String(error);
 };
 
-export const verifyNotificationForAnyEnvironment = async (signedPayload: string) => {
-  let lastError: unknown;
-  for (const environment of environments) {
+/** True when Apple rejected our App Store Server API credentials (key/issuer). */
+export const isAppleCredentialError = (error: unknown): boolean =>
+  error instanceof AppStoreApiError && error.httpStatusCode === 401;
+
+const API_BASE_URLS: Record<Environment, string> = {
+  [Environment.PRODUCTION]: 'https://api.storekit.itunes.apple.com',
+  [Environment.SANDBOX]: 'https://api.storekit-sandbox.itunes.apple.com',
+};
+
+const environments: Environment[] = [Environment.PRODUCTION, Environment.SANDBOX];
+
+const mintAppStoreApiToken = async () => {
+  const privateKey = await importPKCS8(getSigningKey(), 'ES256');
+  const issuedAt = Math.floor(Date.now() / 1000);
+  return await new SignJWT({ bid: APPLE_BUNDLE_ID })
+    .setProtectedHeader({
+      alg: 'ES256',
+      kid: requiredEnvironmentValue('APP_STORE_KEY_ID'),
+      typ: 'JWT',
+    })
+    .setIssuer(requiredEnvironmentValue('APP_STORE_ISSUER_ID'))
+    .setIssuedAt(issuedAt)
+    .setExpirationTime(issuedAt + 300)
+    .setAudience('appstoreconnect-v1')
+    .sign(privateKey);
+};
+
+const getAllSubscriptionStatuses = async (
+  transactionId: string,
+  environment: Environment
+): Promise<Record<string, unknown>> => {
+  const response = await fetch(
+    `${API_BASE_URLS[environment]}/inApps/v1/subscriptions/${encodeURIComponent(transactionId)}`,
+    { headers: { Authorization: `Bearer ${await mintAppStoreApiToken()}` } }
+  );
+  if (!response.ok) {
+    let errorCode: number | null = null;
     try {
-      const notification = await createVerifier(environment).verifyAndDecodeNotification(signedPayload);
-      return { environment, notification };
-    } catch (error) {
-      lastError = error;
+      const body = await response.json();
+      errorCode = Number.isFinite(Number(body?.errorCode)) ? Number(body.errorCode) : null;
+    } catch (_) {
+      // Non-JSON error body; the HTTP status is still meaningful.
     }
+    throw new AppStoreApiError(response.status, errorCode);
   }
-  throw lastError || new Error('Apple notification signature is invalid');
+  return await response.json();
+};
+
+/**
+ * Decode a compact Apple JWS payload WITHOUT verifying its signature.
+ * See the trust-model note above: outputs are hints, never authorization.
+ */
+const decodeAppleJws = (jws: string): Record<string, unknown> => {
+  try {
+    return decodeJwt(jws) as Record<string, unknown>;
+  } catch (_) {
+    throw new Error('Apple signed payload could not be decoded');
+  }
+};
+
+const asEnvironment = (value: unknown): Environment =>
+  value === Environment.SANDBOX ? Environment.SANDBOX : Environment.PRODUCTION;
+
+/** Decode a signedTransaction from a device or an Apple response (unverified). */
+export const decodeAppleTransaction = (signedTransaction: string) => {
+  const transaction = decodeAppleJws(signedTransaction);
+  if (String(transaction.bundleId || '') !== APPLE_BUNDLE_ID) {
+    throw new Error('Apple transaction is for a different app');
+  }
+  return {
+    environment: asEnvironment(transaction.environment),
+    transaction,
+  };
+};
+
+/** Decode an App Store Server Notification signedPayload (unverified). */
+export const decodeAppleNotification = (signedPayload: string) => {
+  const notification = decodeAppleJws(signedPayload);
+  const data = (notification.data ?? notification.summary ?? {}) as Record<string, unknown>;
+  const bundleId = data.bundleId;
+  if (bundleId !== undefined && String(bundleId) !== APPLE_BUNDLE_ID) {
+    throw new Error('Apple notification is for a different app');
+  }
+  return {
+    environment: asEnvironment(data.environment),
+    notification,
+  };
 };
 
 type AppleSubscriptionSnapshot = {
@@ -87,11 +163,10 @@ type AppleSubscriptionSnapshot = {
   autoRenewStatus: number | null;
 };
 
-const readStatusResponse = async (
+const readStatusResponse = (
   response: Record<string, unknown>,
   environment: Environment
-): Promise<AppleSubscriptionSnapshot> => {
-  const verifier = createVerifier(environment);
+): AppleSubscriptionSnapshot => {
   const candidates: AppleSubscriptionSnapshot[] = [];
   const groups = Array.isArray(response.data) ? response.data : [];
 
@@ -100,12 +175,14 @@ const readStatusResponse = async (
     for (const item of transactions) {
       if (typeof item?.signedTransactionInfo !== 'string') continue;
 
-      const transaction = await verifier.verifyAndDecodeTransaction(item.signedTransactionInfo);
+      // This JWS arrived inside Apple's own TLS response, which is the trust
+      // anchor here; its signature is not re-verified (see trust model note).
+      const transaction = decodeAppleJws(item.signedTransactionInfo);
       if (!APPLE_SUPPORTED_PRODUCTS.has(String(transaction.productId || ''))) continue;
 
       let autoRenewStatus: number | null = null;
       if (typeof item?.signedRenewalInfo === 'string') {
-        const renewal = await verifier.verifyAndDecodeRenewalInfo(item.signedRenewalInfo);
+        const renewal = decodeAppleJws(item.signedRenewalInfo);
         autoRenewStatus = Number.isFinite(Number(renewal.autoRenewStatus))
           ? Number(renewal.autoRenewStatus)
           : null;
@@ -153,8 +230,8 @@ export const fetchAppleSubscription = async (
 
   for (const environment of candidates) {
     try {
-      const response = await createClient(environment).getAllSubscriptionStatuses(transactionId);
-      return await readStatusResponse(response as unknown as Record<string, unknown>, environment);
+      const response = await getAllSubscriptionStatuses(transactionId, environment);
+      return readStatusResponse(response, environment);
     } catch (error) {
       lastError = error;
     }
@@ -162,5 +239,3 @@ export const fetchAppleSubscription = async (
 
   throw lastError || new Error('Apple subscription status is unavailable');
 };
-
-export { Environment };

@@ -117,7 +117,8 @@ describe('iapService', () => {
     expect(mockRNIap.isEligibleForIntroOfferIOS).toHaveBeenCalledWith('21868415');
   });
 
-  it('refuses to purchase when the Apple account has already used its intro eligibility', async () => {
+  it('still sells to an Apple account that already used its intro eligibility', async () => {
+    const purchase = subscription(PRODUCT_IDS.MONTHLY);
     iapService.products = [{
       productId: PRODUCT_IDS.MONTHLY,
       subscriptionInfoIOS: {
@@ -126,22 +127,23 @@ describe('iapService', () => {
       },
     }];
     mockRNIap.isEligibleForIntroOfferIOS.mockResolvedValue(false);
+    mockRNIap.requestPurchase.mockResolvedValue(purchase);
 
     const result = await iapService.purchaseSubscription(PRODUCT_IDS.MONTHLY, 'user-1');
 
-    expect(result).toEqual(expect.objectContaining({ success: false }));
-    expect(result.error).toMatch(/could charge immediately/i);
-    expect(mockRNIap.requestPurchase).not.toHaveBeenCalled();
+    expect(result).toEqual({ success: true, purchase });
+    expect(mockRNIap.requestPurchase).toHaveBeenCalledTimes(1);
   });
 
-  it('refuses a paid subscription offer when the 7-day free trial is unavailable', async () => {
+  it('still sells a plan whose store product has no 7-day free trial offer', async () => {
+    const purchase = subscription(PRODUCT_IDS.MONTHLY);
     iapService.products = [{ productId: PRODUCT_IDS.MONTHLY }];
+    mockRNIap.requestPurchase.mockResolvedValue(purchase);
 
     const result = await iapService.purchaseSubscription(PRODUCT_IDS.MONTHLY, 'user-1');
 
-    expect(result).toEqual(expect.objectContaining({ success: false }));
-    expect(result.error).toMatch(/7-day free trial/i);
-    expect(mockRNIap.requestPurchase).not.toHaveBeenCalled();
+    expect(result).toEqual({ success: true, purchase });
+    expect(mockRNIap.requestPurchase).toHaveBeenCalledTimes(1);
   });
 
   it('treats the v14 user-cancelled code as a quiet cancellation', async () => {
@@ -242,7 +244,7 @@ describe('iapService', () => {
     }));
   });
 
-  it('refuses an Android free-trial phase that has no offer token', async () => {
+  it('refuses an Android purchase when Google Play returns no usable offer token', async () => {
     iapService.products = [{
       productId: PRODUCT_IDS.MONTHLY,
       platform: 'android',
@@ -256,8 +258,62 @@ describe('iapService', () => {
     const result = await iapService.purchaseSubscription(PRODUCT_IDS.MONTHLY, 'user-1');
 
     expect(result).toEqual(expect.objectContaining({ success: false }));
-    expect(result.error).toMatch(/7-day free trial/i);
+    expect(result.error).toMatch(/not currently available from Google Play/i);
     expect(mockRNIap.requestPurchase).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the paid Android base plan when the account has no trial offer', async () => {
+    const purchase = subscription(PRODUCT_IDS.MONTHLY);
+    iapService.products = [{
+      productId: PRODUCT_IDS.MONTHLY,
+      platform: 'android',
+      subscriptionOfferDetailsAndroid: [{
+        offerToken: 'paid-base-plan',
+        pricingPhases: { pricingPhaseList: [{ billingPeriod: 'P1M', priceAmountMicros: '3990000' }] },
+      }],
+    }];
+    mockRNIap.requestPurchase.mockResolvedValue(purchase);
+
+    const result = await iapService.purchaseSubscription(PRODUCT_IDS.MONTHLY, 'user-1');
+
+    expect(result).toEqual({ success: true, purchase });
+    expect(mockRNIap.requestPurchase).toHaveBeenCalledWith(expect.objectContaining({
+      request: expect.objectContaining({
+        google: expect.objectContaining({
+          subscriptionOffers: [{ sku: PRODUCT_IDS.MONTHLY, offerToken: 'paid-base-plan' }],
+        }),
+      }),
+    }));
+  });
+
+  it('surfaces the server reason when the Apple verifier returns a non-2xx response', async () => {
+    const { supabase } = require('../../config/supabase');
+    supabase.functions.invoke.mockResolvedValue({
+      data: null,
+      error: {
+        name: 'FunctionsHttpError',
+        message: 'Edge Function returned a non-2xx status code',
+        context: {
+          clone: () => ({
+            json: async () => ({
+              success: false,
+              error: 'This App Store purchase belongs to a different LoveLink account',
+            }),
+          }),
+        },
+      },
+    });
+
+    const result = await iapService.savePurchaseToDatabase(
+      TEST_ACCOUNT_TOKEN,
+      subscription(PRODUCT_IDS.MONTHLY),
+      'monthly'
+    );
+
+    expect(result).toEqual({
+      success: false,
+      error: 'This App Store purchase belongs to a different LoveLink account',
+    });
   });
 
   it('does not retry a failed modern request without the Google Play offer token', async () => {

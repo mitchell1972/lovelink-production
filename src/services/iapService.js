@@ -118,6 +118,22 @@ const getSignedAppleTransaction = (purchase) => [
   typeof candidate === 'string' && candidate.split('.').length === 3
 ) || null;
 
+// supabase-js reports every non-2xx Edge Function response as the unhelpful
+// "Edge Function returned a non-2xx status code"; the server's actual reason
+// is in the response body it carries.
+const getFunctionErrorMessage = async (invokeError, fallback) => {
+  try {
+    const response = invokeError?.context;
+    const body = typeof response?.clone === 'function'
+      ? await response.clone().json()
+      : (typeof response?.json === 'function' ? await response.json() : null);
+    if (typeof body?.error === 'string' && body.error) return body.error;
+  } catch (_) {
+    // Body was not JSON or was already consumed; fall through.
+  }
+  return invokeError?.message || fallback;
+};
+
 const isSevenDayFreeTrialPhase = (phase) =>
   phase?.billingPeriod === 'P7D' && Number(phase?.priceAmountMicros) === 0;
 
@@ -309,17 +325,13 @@ class IAPService {
           error: `The selected subscription is unavailable. Available products: ${available.join(', ') || 'none'}.`,
         };
       }
+      // Trial availability changes the paywall copy, not the right to buy.
+      // An account that already consumed its one-time introductory offer is
+      // charged immediately, and the store's payment sheet shows those terms.
       if (!hasSevenDayFreeTrialOffer(product)) {
-        return {
-          success: false,
-          error: 'The required 7-day free trial is not available for this plan. Please try again after the store offer is configured.',
-        };
-      }
-      if (!await isEligibleForSevenDayFreeTrialOffer(product)) {
-        return {
-          success: false,
-          error: 'This store account is not eligible for the 7-day free trial, so LoveLink will not start a purchase that could charge immediately.',
-        };
+        log('Store product has no 7-day trial offer; continuing with a standard purchase.');
+      } else if (!await isEligibleForSevenDayFreeTrialOffer(product)) {
+        log('Store account already used the introductory offer; the store will charge immediately.');
       }
       log('Product details:', JSON.stringify(product, null, 2));
 
@@ -327,9 +339,18 @@ class IAPService {
         throw new Error('No purchase method available in react-native-iap');
       }
 
-      // Google Play may return a paid base plan plus several offers. Select the
-      // explicit seven-day, zero-price offer—never just the first offer.
-      const offerToken = getAndroidTrialOffer(product)?.offerToken || '';
+      // Google Play may return a paid base plan plus several offers. Prefer
+      // the explicit seven-day, zero-price offer; Play only returns offers the
+      // account is eligible for, so otherwise fall back to the base plan.
+      const androidOffer = getAndroidTrialOffer(product) || getAndroidSubscriptionOffers(product)[0] || null;
+      const offerToken = androidOffer?.offerToken || '';
+      if ((Platform.OS === 'android' || product?.platform === 'android') && !offerToken) {
+        // Google Play subscriptions cannot be purchased without an offer token.
+        return {
+          success: false,
+          error: 'This subscription offer is not currently available from Google Play. Please try again later.',
+        };
+      }
       const modernRequest = {
         request: {
           apple: {
@@ -483,7 +504,12 @@ class IAPService {
         { body: { action: 'refresh' } }
       );
 
-      if (invokeError) throw invokeError;
+      if (invokeError) {
+        return {
+          success: false,
+          error: await getFunctionErrorMessage(invokeError, 'Unable to refresh subscription'),
+        };
+      }
       if (data?.success === false) {
         return { success: false, error: data.error || 'Unable to refresh subscription' };
       }
@@ -582,7 +608,12 @@ class IAPService {
           }
         );
 
-        if (invokeError) throw invokeError;
+        if (invokeError) {
+          return {
+            success: false,
+            error: await getFunctionErrorMessage(invokeError, 'Google Play could not verify this subscription'),
+          };
+        }
         if (!data?.success) {
           return {
             success: false,
@@ -610,7 +641,12 @@ class IAPService {
         }
       );
 
-      if (invokeError) throw invokeError;
+      if (invokeError) {
+        return {
+          success: false,
+          error: await getFunctionErrorMessage(invokeError, 'The App Store could not verify this subscription'),
+        };
+      }
       if (!data?.success || !data?.active) {
         return {
           success: false,

@@ -1,8 +1,9 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import {
+  decodeAppleNotification,
+  decodeAppleTransaction,
+  describeAppleError,
   fetchAppleSubscription,
-  verifyNotificationForAnyEnvironment,
-  verifyTransactionForAnyEnvironment,
 } from '../_shared/appStore.ts';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
@@ -32,7 +33,17 @@ Deno.serve(async (req) => {
       return json({ success: false, error: 'A signed App Store notification is required' }, 400);
     }
 
-    const { environment, notification } = await verifyNotificationForAnyEnvironment(signedPayload);
+    // Decoded without signature verification. The payload only supplies a
+    // transaction id to look up; every entitlement decision below is made
+    // from Apple's own subscription-status response fetched over TLS.
+    let environment;
+    let notification;
+    try {
+      ({ environment, notification } = decodeAppleNotification(signedPayload));
+    } catch (decodeError) {
+      console.error('App Store notification rejected:', describeAppleError(decodeError));
+      return json({ success: false, error: 'Notification payload could not be decoded' }, 400);
+    }
     const notificationData = notification.data;
     const signedTransactionInfo = notificationData?.signedTransactionInfo;
 
@@ -44,12 +55,12 @@ Deno.serve(async (req) => {
       return json({ success: true, ignored: true, reason: 'no_transaction' });
     }
 
-    const verifiedTransaction = await verifyTransactionForAnyEnvironment(signedTransactionInfo);
-    if (verifiedTransaction.environment !== environment) {
+    const decodedTransaction = decodeAppleTransaction(signedTransactionInfo);
+    if (decodedTransaction.environment !== environment) {
       return json({ success: false, error: 'Notification environment mismatch' }, 400);
     }
 
-    const transaction = verifiedTransaction.transaction;
+    const transaction = decodedTransaction.transaction;
     const originalTransactionId = String(transaction.originalTransactionId || '');
     if (!originalTransactionId) {
       return json({ success: false, error: 'Notification is missing its original transaction' }, 400);
@@ -68,22 +79,21 @@ Deno.serve(async (req) => {
       .maybeSingle();
     if (existingError) throw existingError;
 
-    const appAccountToken = transaction.appAccountToken ? String(transaction.appAccountToken) : null;
-    if (existing?.user_id && appAccountToken && existing.user_id !== appAccountToken) {
-      throw new Error('App Store notification ownership mismatch');
-    }
-    const userId = appAccountToken || existing?.user_id;
+    // Re-query Apple instead of deriving anything from the notification body.
+    // This makes duplicate and out-of-order notifications idempotent and keeps
+    // unverified payload fields out of every decision.
+    const subscription = await fetchAppleSubscription(originalTransactionId, environment);
+
+    // Identity: an existing service-role mapping wins; otherwise only Apple's
+    // own appAccountToken — never the unverified payload's — may pick a user.
+    const userId = existing?.user_id || subscription.appAccountToken;
     if (!userId) {
       // Purchases made by old builds may not have an appAccountToken. Ignore
       // unmapped events rather than assigning them to an arbitrary user.
       return json({ success: true, ignored: true, reason: 'unmapped_transaction' });
     }
-
-    // Re-query Apple instead of deriving access from notification type alone.
-    // This makes duplicate and out-of-order notifications idempotent.
-    const subscription = await fetchAppleSubscription(originalTransactionId, environment);
     if (subscription.appAccountToken && subscription.appAccountToken !== userId) {
-      throw new Error('Current App Store ownership does not match the notification');
+      throw new Error('Current App Store ownership does not match the stored entitlement');
     }
 
     if (!subscription.active) {
@@ -116,11 +126,9 @@ Deno.serve(async (req) => {
 
     return json({ success: true, active: true });
   } catch (error) {
-    console.error(
-      'App Store notification processing failed:',
-      error instanceof Error ? error.message : String(error)
-    );
-    // A 500 response causes Apple to retry transient processing failures.
+    console.error('App Store notification processing failed:', describeAppleError(error));
+    // A 500 response causes Apple to retry, which backfills the entitlement
+    // once the underlying fault is fixed.
     return json({ success: false, error: 'Notification processing failed' }, 500);
   }
 });

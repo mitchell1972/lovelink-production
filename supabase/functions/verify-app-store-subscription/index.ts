@@ -2,8 +2,10 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 import {
   APPLE_SUPPORTED_PRODUCTS,
   Environment,
+  decodeAppleTransaction,
+  describeAppleError,
   fetchAppleSubscription,
-  verifyTransactionForAnyEnvironment,
+  isAppleCredentialError,
 } from '../_shared/appStore.ts';
 
 const corsHeaders = {
@@ -79,15 +81,18 @@ Deno.serve(async (req) => {
         if (signedTransaction.length > 32768) {
           return json({ success: false, error: 'App Store transaction is too large' }, 400);
         }
-        const verifiedDeviceTransaction = await verifyTransactionForAnyEnvironment(signedTransaction);
-        environmentHint = verifiedDeviceTransaction.environment;
-        const decoded = verifiedDeviceTransaction.transaction;
+        // Decoded without signature verification — used for fast-fail checks
+        // and hints only. Ownership and entitlement are decided further down
+        // against Apple's own subscription-status response.
+        const decodedDeviceTransaction = decodeAppleTransaction(signedTransaction);
+        environmentHint = decodedDeviceTransaction.environment;
+        const decoded = decodedDeviceTransaction.transaction;
 
         if (!APPLE_SUPPORTED_PRODUCTS.has(String(decoded.productId || '')) ||
             decoded.productId !== requestedProductId) {
           return json({ success: false, error: 'Verified App Store product does not match the selected plan' }, 400);
         }
-        if (decoded.appAccountToken !== user.id) {
+        if (decoded.appAccountToken && decoded.appAccountToken !== user.id) {
           return json({ success: false, error: 'This App Store purchase belongs to a different LoveLink account' }, 403);
         }
 
@@ -108,11 +113,24 @@ Deno.serve(async (req) => {
       return json({ success: false, error: 'Verified App Store subscription does not match the selected plan' }, 400);
     }
 
-    // New purchases must be cryptographically bound to the authenticated user
-    // through StoreKit's appAccountToken. Refreshes may use an existing
-    // service-role-only mapping for subscriptions created by an older build.
-    if (action === 'verify' && subscription.appAccountToken !== user.id) {
+    // New purchases are cryptographically bound to the authenticated user
+    // through StoreKit's appAccountToken. Purchases made by builds that did
+    // not pass a token cannot be, so for those, possession of the store
+    // transaction on this device is the proof — unless another LoveLink
+    // account has already claimed the same subscription.
+    if (action === 'verify' && subscription.appAccountToken && subscription.appAccountToken !== user.id) {
       return json({ success: false, error: 'This App Store purchase belongs to a different LoveLink account' }, 403);
+    }
+    if (action === 'verify' && !subscription.appAccountToken) {
+      const { data: existingOwner, error: ownerError } = await admin
+        .from('app_store_entitlements')
+        .select('user_id')
+        .eq('original_transaction_id', subscription.originalTransactionId)
+        .maybeSingle();
+      if (ownerError) throw ownerError;
+      if (existingOwner && existingOwner.user_id !== user.id) {
+        return json({ success: false, error: 'This App Store purchase belongs to a different LoveLink account' }, 403);
+      }
     }
     if (action === 'refresh' && subscription.appAccountToken && subscription.appAccountToken !== user.id) {
       return json({ success: false, error: 'Stored App Store ownership no longer matches this account' }, 403);
@@ -162,13 +180,17 @@ Deno.serve(async (req) => {
       environment: subscription.environment,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = describeAppleError(error);
     console.error('App Store verification failed:', message);
-    const notConfigured = /APP_STORE_(PRIVATE_KEY_BASE64|KEY_ID|ISSUER_ID) is not configured/.test(message);
+    // Misconfigured secrets and Apple credential rejections are LoveLink's
+    // fault, not the customer's; report them distinctly so the alert is actionable.
+    const notConfigured =
+      /APP_STORE_(PRIVATE_KEY_BASE64|KEY_ID|ISSUER_ID) is not configured/.test(message) ||
+      isAppleCredentialError(error);
     return json({
       success: false,
       error: notConfigured
-        ? 'App Store verification is not configured'
+        ? 'App Store verification is not configured. Please contact LoveLink support.'
         : 'Subscription verification failed. Please try again.',
     }, notConfigured ? 503 : 500);
   }
