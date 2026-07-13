@@ -3,13 +3,15 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
+    "postinstall": "node scripts/patch-react-native-iap-ios.cjs",
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "test": "jest --runInBand",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage --runInBand"
+    "test": "jest src --runInBand",
+    "test:watch": "jest src --watch",
+    "test:coverage": "jest src --coverage --runInBand",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
@@ -31,17 +33,20 @@
     "react": "19.1.0",
     "react-dom": "^19.1.0",
     "react-native": "0.81.5",
-    "react-native-iap": "^14.6.4",
+    "react-native-iap": "14.7.11",
+    "react-native-nitro-modules": "0.31.10",
     "react-native-url-polyfill": "^2.0.0",
     "react-native-web": "^0.21.2"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
-    "expo-dev-client": "~6.0.20",
     "@playwright/test": "^1.58.2",
+    "@types/react": "~19.1.10",
     "babel-jest": "^29.7.0",
     "babel-preset-expo": "~54.0.10",
-    "jest": "^29.7.0"
+    "expo-dev-client": "~6.0.20",
+    "jest": "^29.7.0",
+    "typescript": "~5.9.2"
   },
   "private": true
 }

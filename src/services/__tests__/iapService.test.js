@@ -45,6 +45,7 @@ const subscription = (productId) => ({
 
 describe('iapService', () => {
   beforeEach(() => {
+    iapService.removeListeners();
     jest.clearAllMocks();
     Platform.OS = 'ios';
     iapService.products = [];
@@ -104,17 +105,127 @@ describe('iapService', () => {
       request: {
         apple: {
           sku: PRODUCT_IDS.MONTHLY,
+          andDangerouslyFinishTransactionAutomatically: false,
           appAccountToken: TEST_ACCOUNT_TOKEN,
         },
         google: {
           skus: [PRODUCT_IDS.MONTHLY],
-          obfuscatedAccountIdAndroid: TEST_ACCOUNT_TOKEN,
+          obfuscatedAccountId: TEST_ACCOUNT_TOKEN,
         },
       },
       type: 'subs',
     });
     expect(mockRNIap.finishTransaction).not.toHaveBeenCalled();
     expect(mockRNIap.isEligibleForIntroOfferIOS).toHaveBeenCalledWith('21868415');
+  });
+
+  it('waits for the purchase listener when the native request resolves with an empty array', async () => {
+    const purchase = subscription(PRODUCT_IDS.MONTHLY);
+    let emitPurchase;
+    iapService.products = [{ productId: PRODUCT_IDS.MONTHLY }];
+    mockRNIap.purchaseUpdatedListener.mockImplementation((listener) => {
+      emitPurchase = listener;
+      return { remove: jest.fn() };
+    });
+    mockRNIap.requestPurchase.mockResolvedValue([]);
+
+    const resultPromise = iapService.purchaseSubscription(PRODUCT_IDS.MONTHLY, TEST_ACCOUNT_TOKEN);
+    await Promise.resolve();
+    await Promise.resolve();
+    emitPurchase(purchase);
+
+    await expect(resultPromise).resolves.toEqual({ success: true, purchase });
+  });
+
+  it('keeps one native listener pair across sequential purchases', async () => {
+    const monthlyPurchase = subscription(PRODUCT_IDS.MONTHLY);
+    const yearlyPurchase = subscription(PRODUCT_IDS.YEARLY);
+    iapService.products = [
+      { productId: PRODUCT_IDS.MONTHLY },
+      { productId: PRODUCT_IDS.YEARLY },
+    ];
+    mockRNIap.requestPurchase
+      .mockResolvedValueOnce(monthlyPurchase)
+      .mockResolvedValueOnce(yearlyPurchase);
+
+    await expect(
+      iapService.purchaseSubscription(PRODUCT_IDS.MONTHLY, TEST_ACCOUNT_TOKEN)
+    ).resolves.toEqual({ success: true, purchase: monthlyPurchase });
+    await expect(
+      iapService.purchaseSubscription(PRODUCT_IDS.YEARLY, TEST_ACCOUNT_TOKEN)
+    ).resolves.toEqual({ success: true, purchase: yearlyPurchase });
+
+    expect(mockRNIap.purchaseUpdatedListener).toHaveBeenCalledTimes(1);
+    expect(mockRNIap.purchaseErrorListener).toHaveBeenCalledTimes(1);
+    const updateSubscription = mockRNIap.purchaseUpdatedListener.mock.results[0].value;
+    const errorSubscription = mockRNIap.purchaseErrorListener.mock.results[0].value;
+    expect(updateSubscription.remove).not.toHaveBeenCalled();
+    expect(errorSubscription.remove).not.toHaveBeenCalled();
+  });
+
+  it('clears the in-progress request when the native bridge throws synchronously', async () => {
+    const bridgeError = Object.assign(new Error('Bridge rejected request'), {
+      code: 'E_SERVICE_ERROR',
+    });
+    const purchase = subscription(PRODUCT_IDS.MONTHLY);
+    iapService.products = [{ productId: PRODUCT_IDS.MONTHLY }];
+    mockRNIap.requestPurchase
+      .mockImplementationOnce(() => { throw bridgeError; })
+      .mockResolvedValueOnce(purchase);
+
+    await expect(
+      iapService.purchaseSubscription(PRODUCT_IDS.MONTHLY, TEST_ACCOUNT_TOKEN)
+    ).resolves.toEqual(expect.objectContaining({ success: false }));
+    expect(iapService.pendingPurchaseRequest).toBeNull();
+
+    await expect(
+      iapService.purchaseSubscription(PRODUCT_IDS.MONTHLY, TEST_ACCOUNT_TOKEN)
+    ).resolves.toEqual({ success: true, purchase });
+  });
+
+  it('recovers an approved purchase from the store if the listener event is dropped', async () => {
+    jest.useFakeTimers();
+    try {
+      const purchase = { ...subscription(PRODUCT_IDS.MONTHLY), isActive: true };
+      iapService.products = [{ productId: PRODUCT_IDS.MONTHLY }];
+      mockRNIap.requestPurchase.mockResolvedValue([]);
+      mockRNIap.getActiveSubscriptions.mockResolvedValue([purchase]);
+
+      const resultPromise = iapService.purchaseSubscription(PRODUCT_IDS.MONTHLY, TEST_ACCOUNT_TOKEN);
+      await Promise.resolve();
+      await Promise.resolve();
+      await jest.advanceTimersByTimeAsync(120000);
+
+      await expect(resultPromise).resolves.toEqual({ success: true, purchase });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not activate a Google Play purchase that is still pending', async () => {
+    const purchase = {
+      ...subscription(PRODUCT_IDS.MONTHLY),
+      purchaseState: 'pending',
+      purchaseStateAndroid: 2,
+    };
+    iapService.products = [{
+      productId: PRODUCT_IDS.MONTHLY,
+      platform: 'android',
+      subscriptionOfferDetailsAndroid: [{
+        offerToken: 'seven-day-trial',
+        pricingPhases: {
+          pricingPhaseList: [{ billingPeriod: 'P7D', priceAmountMicros: '0' }],
+        },
+      }],
+    }];
+    mockRNIap.requestPurchase.mockResolvedValue(purchase);
+
+    const result = await iapService.purchaseSubscription(PRODUCT_IDS.MONTHLY, TEST_ACCOUNT_TOKEN);
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      pending: true,
+    }));
   });
 
   it('still sells to an Apple account that already used its intro eligibility', async () => {
@@ -206,7 +317,7 @@ describe('iapService', () => {
     expect(mockRNIap.requestPurchase).toHaveBeenCalledWith(expect.objectContaining({
       request: expect.objectContaining({
         google: expect.objectContaining({
-          obfuscatedAccountIdAndroid: 'user-1',
+          obfuscatedAccountId: 'user-1',
           subscriptionOffers: [{ sku: PRODUCT_IDS.MONTHLY, offerToken: 'seven-day-trial' }],
         }),
       }),
