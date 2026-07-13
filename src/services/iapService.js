@@ -28,6 +28,7 @@ const legacySubscriptionSkus = [
 const validPlans = new Set(['monthly', 'yearly']);
 const GOOGLE_PLAY_VERIFY_FUNCTION = 'verify-google-play-subscription';
 const APP_STORE_VERIFY_FUNCTION = 'verify-app-store-subscription';
+const PURCHASE_RESULT_TIMEOUT_MS = 120000;
 
 const isSupportedSubscriptionProductId = (productId) =>
   typeof productId === 'string' &&
@@ -51,12 +52,18 @@ const isUserCancelledPurchaseError = (purchaseError) => {
   ].includes(purchaseError?.code);
 };
 
-const normalizePurchaseResult = (result) => {
-  if (Array.isArray(result)) {
-    return result.find(Boolean) || null;
-  }
-  return result || null;
+const findPurchaseForProduct = (result, productId) => {
+  const purchases = Array.isArray(result) ? result : (result ? [result] : []);
+  return purchases.find((purchase) => purchase?.productId === productId) || null;
 };
+
+const createPurchaseTimeoutError = () => Object.assign(
+  new Error('The store did not confirm the purchase. If you approved it, use Restore Purchases.'),
+  { code: 'E_PURCHASE_RESULT_TIMEOUT' }
+);
+
+const isPendingPurchase = (purchase) =>
+  purchase?.purchaseState === 'pending' || Number(purchase?.purchaseStateAndroid) === 2;
 
 const normalizeStoreProduct = (product) => {
   if (!product) return null;
@@ -217,7 +224,66 @@ class IAPService {
     this.products = [];
     this.purchaseUpdateSubscription = null;
     this.purchaseErrorSubscription = null;
+    this.pendingPurchaseRequest = null;
+    this.onPurchaseSuccess = null;
+    this.onPurchaseError = null;
     this.isInitialized = false;
+  }
+
+  /**
+   * Keep exactly one native listener pair alive for the IAP connection.
+   * Older react-native-iap iOS bridges remove every native subscriber when a
+   * single subscription is removed, which can otherwise lose a paid purchase
+   * while the paywall is navigating or re-rendering.
+   */
+  ensurePurchaseListeners() {
+    if (!this.purchaseUpdateSubscription &&
+        typeof RNIap.purchaseUpdatedListener === 'function') {
+      this.purchaseUpdateSubscription = RNIap.purchaseUpdatedListener((purchase) => {
+        log('Purchase updated:', purchase);
+
+        const pending = this.pendingPurchaseRequest;
+        const matchingPurchase = pending
+          ? findPurchaseForProduct(purchase, pending.productId)
+          : null;
+        if (pending && matchingPurchase) {
+          this.settlePendingPurchase(pending, 'resolve', matchingPurchase);
+          return;
+        }
+
+        // This can be a StoreKit transaction delivered after app startup. Its
+        // owner must verify and persist it before finishing the transaction.
+        if (hasPurchaseProof(purchase) && this.onPurchaseSuccess) {
+          this.onPurchaseSuccess(purchase);
+        }
+      });
+    }
+
+    if (!this.purchaseErrorSubscription &&
+        typeof RNIap.purchaseErrorListener === 'function') {
+      this.purchaseErrorSubscription = RNIap.purchaseErrorListener((purchaseErr) => {
+        error('Purchase error listener:', purchaseErr);
+
+        const pending = this.pendingPurchaseRequest;
+        if (pending) {
+          this.settlePendingPurchase(pending, 'reject', purchaseErr);
+          return;
+        }
+
+        if (this.onPurchaseError) {
+          this.onPurchaseError(purchaseErr);
+        }
+      });
+    }
+  }
+
+  settlePendingPurchase(pending, outcome, value) {
+    if (!pending || this.pendingPurchaseRequest !== pending) return false;
+
+    if (pending.resultTimeout) clearTimeout(pending.resultTimeout);
+    this.pendingPurchaseRequest = null;
+    pending[outcome](value);
+    return true;
   }
 
   /**
@@ -355,54 +421,78 @@ class IAPService {
         request: {
           apple: {
             sku: productId,
+            // Entitlement is granted by the verified Supabase response first.
+            // StoreKit must not finish the transaction before that succeeds.
+            andDangerouslyFinishTransactionAutomatically: false,
             ...(appAccountToken ? { appAccountToken } : {}),
           },
           google: {
             skus: [productId],
-            ...(appAccountToken ? { obfuscatedAccountIdAndroid: appAccountToken } : {}),
+            // react-native-iap 14.7 renamed this OpenIAP field. The backend
+            // checks it to prevent one Play purchase being claimed by another
+            // LoveLink account.
+            ...(appAccountToken ? { obfuscatedAccountId: appAccountToken } : {}),
             ...(offerToken ? { subscriptionOffers: [{ sku: productId, offerToken }] } : {}),
           },
         },
         type: 'subs',
       };
 
+      if (this.pendingPurchaseRequest) {
+        return {
+          success: false,
+          error: 'A purchase is already in progress. Please wait for the store to finish.',
+        };
+      }
+
+      // v14 normally delivers the result through listeners rather than the
+      // request promise. Register the singleton listeners before checkout so
+      // neither a fast StoreKit nor Google Play response can be lost.
+      this.ensurePurchaseListeners();
+
       const purchase = await new Promise((resolve, reject) => {
-        let settled = false;
-        let updateListener = null;
-        let errorListener = null;
-        const cleanup = () => {
-          updateListener?.remove?.();
-          errorListener?.remove?.();
+        const pending = {
+          productId,
+          resolve,
+          reject,
+          resultTimeout: null,
         };
-        const settle = (callback, value) => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          callback(value);
-        };
+        this.pendingPurchaseRequest = pending;
+
         const handlePurchase = (candidate) => {
-          const normalized = normalizePurchaseResult(candidate);
-          if (!normalized || normalized.productId !== productId) return;
-          settle(resolve, normalized);
+          const matchingPurchase = findPurchaseForProduct(candidate, productId);
+          if (!matchingPurchase) return;
+          this.settlePendingPurchase(pending, 'resolve', matchingPurchase);
         };
 
-        // v14 commonly emits the result through listeners rather than resolving
-        // requestPurchase with it. Register first so neither outcome is lost.
-        if (typeof RNIap.purchaseUpdatedListener === 'function') {
-          updateListener = RNIap.purchaseUpdatedListener(handlePurchase);
-        }
-        if (typeof RNIap.purchaseErrorListener === 'function') {
-          errorListener = RNIap.purchaseErrorListener((purchaseError) => {
-            settle(reject, purchaseError);
-          });
-        }
+        // The native API is deliberately event-based and normally resolves
+        // requestPurchase with an empty array. If a device drops the listener
+        // event, reconcile once with the store before reporting a failure.
+        pending.resultTimeout = setTimeout(async () => {
+          try {
+            const restored = await this.restorePurchases();
+            const recoveredPurchase = findPurchaseForProduct(restored, productId);
+            if (recoveredPurchase) {
+              this.settlePendingPurchase(pending, 'resolve', recoveredPurchase);
+              return;
+            }
+          } catch (restoreError) {
+            error('Purchase recovery failed:', restoreError);
+          }
+          this.settlePendingPurchase(pending, 'reject', createPurchaseTimeoutError());
+        }, PURCHASE_RESULT_TIMEOUT_MS);
 
         // Never fall back to the legacy SKU-only request. On Google Play that
         // request omits the required trial offer token and can select a paid
         // base plan instead of the promised seven-day free trial.
-        Promise.resolve(RNIap.requestPurchase(modernRequest))
+        // Start from an already-resolved promise so a synchronous native
+        // bridge exception follows the same cleanup path as an async reject.
+        Promise.resolve()
+          .then(() => RNIap.requestPurchase(modernRequest))
           .then(handlePurchase)
-          .catch((purchaseError) => settle(reject, purchaseError));
+          .catch((purchaseError) => {
+            this.settlePendingPurchase(pending, 'reject', purchaseError);
+          });
       });
 
       log('=== PURCHASE RESULT ===');
@@ -419,6 +509,14 @@ class IAPService {
       if (!hasPurchaseProof(purchase)) {
         error('Purchase missing transaction ID or purchase token');
         return { success: false, error: 'Invalid purchase - no transaction' };
+      }
+
+      if (isPendingPurchase(purchase)) {
+        return {
+          success: false,
+          pending: true,
+          error: 'Your purchase is pending approval. Premium will unlock automatically when the store confirms it.',
+        };
       }
 
       log('Purchase successful with transaction:', purchase.transactionId);
@@ -665,39 +763,25 @@ class IAPService {
    * Set up purchase listeners for handling transactions
    */
   setupListeners(onPurchaseSuccess, onPurchaseError) {
-    // Remove existing listeners
-    this.removeListeners();
-
-    // Listen for purchase updates
-    if (typeof RNIap.purchaseUpdatedListener === 'function') {
-      this.purchaseUpdateSubscription = RNIap.purchaseUpdatedListener(
-        async (purchase) => {
-          log('Purchase updated:', purchase);
-
-          if (hasPurchaseProof(purchase) && onPurchaseSuccess) {
-            // The callback must verify and persist the entitlement before it
-            // calls finishPurchaseTransaction. Never acknowledge here first.
-            onPurchaseSuccess(purchase);
-          }
-        }
-      );
-    }
-
-    // Listen for purchase errors
-    if (typeof RNIap.purchaseErrorListener === 'function') {
-      this.purchaseErrorSubscription = RNIap.purchaseErrorListener((purchaseErr) => {
-        error('Purchase error listener:', purchaseErr);
-        if (onPurchaseError) {
-          onPurchaseError(purchaseErr);
-        }
-      });
-    }
+    this.onPurchaseSuccess = onPurchaseSuccess || null;
+    this.onPurchaseError = onPurchaseError || null;
+    this.ensurePurchaseListeners();
   }
 
   /**
    * Remove purchase listeners
    */
   removeListeners() {
+    const pending = this.pendingPurchaseRequest;
+    if (pending) {
+      this.settlePendingPurchase(
+        pending,
+        'reject',
+        Object.assign(new Error('The store connection was closed.'), {
+          code: 'E_IAP_CONNECTION_CLOSED',
+        })
+      );
+    }
     if (this.purchaseUpdateSubscription) {
       this.purchaseUpdateSubscription.remove();
       this.purchaseUpdateSubscription = null;
@@ -706,6 +790,8 @@ class IAPService {
       this.purchaseErrorSubscription.remove();
       this.purchaseErrorSubscription = null;
     }
+    this.onPurchaseSuccess = null;
+    this.onPurchaseError = null;
   }
 
   /**

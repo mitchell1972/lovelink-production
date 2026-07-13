@@ -254,10 +254,10 @@ PODS:
   - hermes-engine (0.81.5):
     - hermes-engine/Pre-built (= 0.81.5)
   - hermes-engine/Pre-built (0.81.5)
-  - NitroIap (14.6.4):
+  - NitroIap (14.7.11):
     - hermes-engine
     - NitroModules
-    - openiap (= 1.3.8)
+    - openiap (= 1.3.14)
     - RCTRequired
     - RCTTypeSafety
     - React-callinvoker
@@ -302,7 +302,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - openiap (1.3.8)
+  - openiap (1.3.14)
   - RCTDeprecation (0.81.5)
   - RCTRequired (0.81.5)
   - RCTTypeSafety (0.81.5):
@@ -2292,9 +2292,9 @@ SPEC CHECKSUMS:
   EXUpdatesInterface: 5adf50cb41e079c861da6d9b4b954c3db9a50734
   FBLazyVector: e95a291ad2dadb88e42b06e0c5fb8262de53ec12
   hermes-engine: 9f4dfe93326146a1c99eb535b1cb0b857a3cd172
-  NitroIap: 53d74329179ab5f1e2e2167d4356f074c92319c7
+  NitroIap: ea2f74a7a969627e8cecb5eb8bb378bc76b99bea
   NitroModules: a71a5ab2911caf79e45170e6e12475b5260a12d0
-  openiap: 264492fb10bef0bc657f16dd0e32841d35913e45
+  openiap: ab2a58a26223bf7167dd47d42e0532f97ed7dae4
   RCTDeprecation: 943572d4be82d480a48f4884f670135ae30bf990
   RCTRequired: 8f3cfc90cc25cf6e420ddb3e7caaaabc57df6043
   RCTTypeSafety: 16a4144ca3f959583ab019b57d5633df10b5e97c

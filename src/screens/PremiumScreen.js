@@ -22,7 +22,6 @@ import {
   formatPremiumExpiry,
 } from '../services/premiumService';
 import {
-  iapService,
   PRODUCT_IDS,
   initializeIAP,
   getProducts,
@@ -67,11 +66,6 @@ export default function PremiumScreen({ onNavigate, onSubscriptionActivated, sub
 
   useEffect(() => {
     initializeScreen();
-    
-    // Cleanup on unmount
-    return () => {
-      iapService.removeListeners();
-    };
   }, []);
 
   const initializeScreen = async () => {
@@ -191,15 +185,20 @@ export default function PremiumScreen({ onNavigate, onSubscriptionActivated, sub
       } else if (result.cancelled) {
         // User cancelled - do nothing
         log('Purchase cancelled by user');
+      } else if (result.pending) {
+        Alert.alert(
+          'Purchase Pending',
+          result.error || 'The store is still processing this purchase. Premium will unlock automatically when it is approved.'
+        );
       } else {
         Alert.alert('Purchase Failed', result.error || 'Unable to complete purchase. Please try again.');
       }
     } catch (err) {
       logError('Purchase error:', err);
       Alert.alert('Error', 'An error occurred during purchase. Please try again.');
+    } finally {
+      setPurchasing(false);
     }
-
-    setPurchasing(false);
   };
 
   const handleRestorePurchases = async () => {
@@ -246,9 +245,9 @@ export default function PremiumScreen({ onNavigate, onSubscriptionActivated, sub
     } catch (err) {
       logError('Restore error:', err);
       Alert.alert('Error', 'Unable to restore purchases. Please try again.');
+    } finally {
+      setRestoring(false);
     }
-
-    setRestoring(false);
   };
 
   const handleManageSubscription = () => {
@@ -394,6 +393,10 @@ export default function PremiumScreen({ onNavigate, onSubscriptionActivated, sub
           
           {/* Monthly Option */}
           <TouchableOpacity
+            testID="subscription-plan-monthly"
+            accessibilityRole="radio"
+            accessibilityLabel="Monthly subscription"
+            accessibilityState={{ selected: selectedPlan === 'monthly', disabled: !monthlyAvailable }}
             style={[
               styles.planOption,
               selectedPlan === 'monthly' && styles.planOptionSelected,
@@ -419,6 +422,10 @@ export default function PremiumScreen({ onNavigate, onSubscriptionActivated, sub
 
           {/* Yearly Option */}
           <TouchableOpacity
+            testID="subscription-plan-yearly"
+            accessibilityRole="radio"
+            accessibilityLabel="Yearly subscription"
+            accessibilityState={{ selected: selectedPlan === 'yearly', disabled: !yearlyAvailable }}
             style={[
               styles.planOption,
               selectedPlan === 'yearly' && styles.planOptionSelected,
@@ -473,6 +480,9 @@ export default function PremiumScreen({ onNavigate, onSubscriptionActivated, sub
       ) : (
         <>
           <TouchableOpacity
+            testID="subscription-submit"
+            accessibilityRole="button"
+            accessibilityLabel={selectedPlanHasTrial ? 'Start 7-day free trial' : 'Subscribe now'}
             style={[
               styles.subscribeButton,
               (purchasing || restoring || !selectedPlanAvailable) && styles.buttonDisabled,
@@ -493,6 +503,9 @@ export default function PremiumScreen({ onNavigate, onSubscriptionActivated, sub
           </TouchableOpacity>
 
           <TouchableOpacity
+            testID="subscription-restore"
+            accessibilityRole="button"
+            accessibilityLabel="Restore purchases"
             style={[
               styles.restoreButton,
               (restoring || purchasing) && styles.buttonDisabled,
